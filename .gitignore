@@ -1,0 +1,24 @@
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# System Files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Output Directories (Large generated files)
+output/
+eos_plots/
+compose_comparison_plots/
+test_plots/
+
+# Virtual Environments
+venv/
+env/
+.env
+
+# IDE settings
+.vscode/
+.idea/
