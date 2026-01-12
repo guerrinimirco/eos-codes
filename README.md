@@ -1,4 +1,4 @@
-# Research Python Codes
+# Python Codes for nuclear EOS table generator 
 
 This repository contains Python codes for calculating Equations of State (EOS) for astrophysical simulations.
 
@@ -22,5 +22,5 @@ The project includes solvers for different nuclear models:
 
 Scripts are generally run directly. For example, to generate hybrid EOS tables:
 ```bash
-python zlvmit_orchestrator.py
+python zlvmit_hybrid_table_generator.py
 ```
