@@ -1,12 +1,14 @@
 # Nuclear Equation of State (EOS) Table Generator
 
-A comprehensive Python library for calculating Equations of State (EOS) for astrophysical simulations, including neutron star matter, supernovae, and compact object mergers.
+A Python library for calculating finite temperature Equations of State (EOS) for astrophysical applications (including neutron star matter, supernovae, and compact object mergers) and heavy ion collisions.
+
+The details of the models are reported in M. Guerrini PhD Thesis Chapter 2 (soon available) and references therein.
 
 ## Overview
 
 This repository implements several nuclear and quark matter EOS models:
 
-| Model | Description | Particles | 
+| Model | Description | Particles |
 |-------|-------------|-----------|
 | **SFHo** | Relativistic Mean Field model | Nucleons, Hyperons, Deltas |
 | **AlphaBag** | α_s-corrected MIT bag model | u, d, s quarks |
@@ -26,25 +28,27 @@ Shared infrastructure used by all models.
 | `general_physics_constants.py` | Physical constants (ħc, m_n, m_p, etc.) |
 | `general_particles.py` | Particle definitions (baryons, quarks, leptons) |
 | `general_fermi_integrals.py` | Fermi-Dirac integrals for fermions |
-| `general_bose_integrals.py` | Bose-Einstein integrals for mesons |
+| `general_bose_integrals.py` | Bose-Einstein integrals for bosons |
 | `general_thermodynamics_leptons.py` | Electron, muon, neutrino thermodynamics |
-| `general_eos_solver.py` | Generic EOS solver framework |
-| `general_plotting_info.py` | Plotting utilities and styles |
+| `general_eos_solver.py` | Generic EOS solver framework (old approach, not used in new files) |
+| `general_plotting_info.py` | Plotting utilities and styles (old file, will be updated in future) |
 
 ### SFHo Model (`sfho_*.py`)
-Relativistic Mean Field (RMF) hadronic EOS with σ-ω-ρ-φ meson exchange.
+Relativistic Mean Field (RMF) hadronic EOS with σ-ω-ρ-φ meson exchange. 
+See Guerrini PhD Thesis for a summary of the model and Fortin et al. (2017), Steiner et al. (2013) for details.
 
 | File | Description |
 |------|-------------|
-| `sfho_parameters.py` | Model parameters (sfho, sfhoy, 2fam variants) |
-| `sfho_thermodynamics_hadrons.py` | Hadron thermodynamics with meson fields |
-| `sfho_eos.py` | EOS solvers (beta_eq, fixed_yc, trapped_neutrinos) |
+| `sfho_parameters.py` | Model parameterizations (some default ones: sfho, sfhoy, sfhoy_star, 2fam variants) |
+| `sfho_thermodynamics_hadrons.py` | Hadron thermodynamics with meson mean fields and pseudoscalar mesons |
+| `sfho_eos.py` | EOS solvers (beta_eq, fixed_yc, fixed_yc_ys, trapped_neutrinos) |
 | `sfho_compute_tables.py` | **Main script to generate SFHo tables** |
 | `sfho_nuclear_saturation_properties.py` | Nuclear matter properties at saturation |
-| `sfho_compare_with_compose.py` | Validation against CompOSE tables |
+| `sfho_compare_with_compose.py` | Validation against CompOSE tables (not updated) |
 
 ### AlphaBag Model (`alphabag_*.py`)
-α_s-corrected MIT bag model for quark matter with perturbative QCD corrections.
+α_s-corrected MIT bag model for quark matter with perturbative QCD correct  ions.
+See Guerrini PhD Thesis for a summary of the model and references therein.
 
 | File | Description |
 |------|-------------|
@@ -61,28 +65,30 @@ Vector-MIT bag model with vector interactions for quark matter.
 | `vmit_parameters.py` | Bag constant, vector coupling G_V |
 | `vmit_thermodynamics_quarks.py` | Quark thermodynamics with vector fields |
 | `vmit_eos.py` | EOS solvers |
-| `vmit_compute_tables.py` | Table generation script |
+| `vmit_compute_tables.py` | **Main script to generate vMIT tables**  |
 
 ### ZL Model (`zl_*.py`)
 Zhao-Lattimer nucleonic model.
+See Guerrini PhD Thesis for a summary of the model and Zhao and Lattimer (2020) for details.
 
 | File | Description |
 |------|-------------|
 | `zl_parameters.py` | Model coupling constants |
 | `zl_thermodynamics_nucleons.py` | Nucleon thermodynamics |
 | `zl_eos.py` | EOS solvers |
-| `zl_compute_tables.py` | Table generation script |
+| `zl_compute_tables.py` | **Main script to generate ZL tables** |
 
 ### ZLvMIT Hybrid Model (`zlvmit_*.py`)
 Hadron-quark phase transition using Gibbs, Maxwell, or intermediate constructions.
+See Guerrini PhD Thesis for a summary of the model and Constantinou et al. (2025) for details.
 
 | File | Description |
 |------|-------------|
 | `zlvmit_mixed_phase_eos.py` | Mixed phase solver with phase boundaries |
 | `zlvmit_hybrid_table_generator.py` | **Main script for hybrid tables** |
 | `zlvmit_isentropic.py` | Isentropic trajectory calculations |
-| `zlvmit_thermodynamic_derivatives.py` | χ, c_s², susceptibilities |
-| `zlvmit_trapped_solvers.py` | Trapped neutrino mode solvers |
+| `zlvmit_thermodynamic_derivatives.py` | χ, c_s², susceptibilities (still work in progress)|
+| `zlvmit_trapped_solvers.py` | Trapped neutrino mode solvers (will be unified with mixed_phase_eos.py) |
 | `zlvmit_plot_results.py` | Plotting utilities for hybrid EOS |
 
 ---
@@ -129,11 +135,17 @@ results = compute_alphabag_table(settings)
 ```
 
 ### 3. Generate Hybrid ZLvMIT Tables
+modify the 
+
+# =============================================================================
+# USER CONFIGURATION - EDIT THESE VALUES
+# =============================================================================
+
+and run
 
 ```bash
 python zlvmit_hybrid_table_generator.py
 ```
-
 ---
 
 ## Equilibrium Modes
@@ -177,19 +189,12 @@ Key columns:
 - SciPy
 - Matplotlib (for plotting)
 
-```bash
-pip install numpy scipy matplotlib
-```
 
 ---
 
-## Sign Conventions
-
-| Quantity | Convention |
-|----------|------------|
-| μ_C (charge chemical potential) | **Negative** for neutron-rich matter |
-| μ_e (electron chemical potential) | Positive |
-| Y_C (charge fraction) | n_C/n_B, typically 0 to 0.5 |
+## Conventions
+Y_S is the strangeness fraction with S=number of strange quarks (S=1 for hyperons, note that sometimes in the literature S=-1 is used )
+Y_C is the electric charge fraction of hadrons and quarks (B,C,S could be remapped in u,d,s or B,I,S where I=isospin)
 
 ---
 
@@ -212,19 +217,29 @@ pip install numpy scipy matplotlib
 | α_s | 0.1-0.4 | Strong coupling constant |
 | m_s | 100-150 MeV | Strange quark mass |
 
----
-
-## References
-
-- Steiner, A. W., Hempel, M., & Fischer, T. (2013). Core-collapse supernova equations of state based on neutron star observations. ApJ, 774, 17.
-- Fortin, M., et al. (2018). Neutron star radii and crusts: Uncertainties and unified equations of state. Phys. Rev. C, 97, 035802.
 
 ---
 
-## Author
+## General informations
 
-Mirco Guerrini
+This is a recent (2026) Python rewrite of some of the code I wrote in Mathematica and Python for my Master's thesis (2022) and during my PhD (2023-2026). For the moment, the documentation is poor and the usability is not very user-friendly, but please contact me if you want to use them and need help.
 
-## License
+mirco.guerrini@unife.it
+https://inspirehep.net/authors/2775420
 
-MIT License
+My main collaborators:
+- A. Drago (U. Ferrara) - PhD supervisor
+- G. Pagliara (U. Ferrara) - PhD supervisor
+- C. Constantinou (ECT* Trento) 
+- A. Lavagno (Politecnico di Torino)
+- T. Zhao 
+- S. Han
+
+
+## Future plans
+- general hadron-quark mixed phase for SFHo-alphaBag with hyperons and deltas
+- DD2+vMIT mixed phase with hyperons
+- rewrite in python my codes for adding crusts (subnuclear phases) and solve TOV equations
+- response functions (heat capacities, susceptibilities, speed of sound, etc.)
+- rewrite in python my codes for nucleation of quark matter (see my PhD Thesis)
+- Hydrodynamic hadron-quark matter conversion

@@ -208,16 +208,36 @@ def get_default_guess_fixed_yc_ys(
 ) -> np.ndarray:
     """
     Generate initial guess for fixed Y_C and Y_S: [σ, ω, ρ, φ, μ_B, μ_C, μ_S].
+    
+    Based on analysis of converged solutions:
+    - μ_S is POSITIVE at low density (~130 MeV × Y_S) and decreases with density
+    - μ_S can become negative at high density
+    - phi is small and negative, scaling with Y_S
     """
     guess_yc = get_default_guess_fixed_yc(n_B, Y_C, T, params)
     
-    # phi field for strangeness
     n_sat = 0.158
     ratio = n_B / n_sat
-    phi = -10.0 * ratio * Y_S
     
-    # mu_S: negative to favor strange baryons
-    mu_S = -50.0 * Y_S
+    # phi field for strangeness (negative, small)
+    phi = -1.0 * min(ratio, 5.0) * Y_S
+    
+    # mu_S: POSITIVE at low density, decreasing with density
+    # From converged solutions: mu_S ~ 130 - 100*(ratio-0.8) at Y_S=0.1
+    # Scale by Y_S for other strangeness fractions
+    if ratio < 0.5:
+        mu_S_base = 150.0  # High at low density
+    elif ratio < 1.0:
+        mu_S_base = 130.0 - 50.0 * (ratio - 0.5)  # 130 to 105
+    elif ratio < 2.0:
+        mu_S_base = 105.0 - 80.0 * (ratio - 1.0)  # 105 to 25
+    elif ratio < 4.0:
+        mu_S_base = 25.0 - 40.0 * (ratio - 2.0)   # 25 to -55
+    else:
+        mu_S_base = -55.0 - 20.0 * (ratio - 4.0)  # -55 and below
+    
+    # Scale by Y_S (mu_S increases with more strangeness required)
+    mu_S = mu_S_base * (Y_S / 0.1) if Y_S > 0 else 0.0
     
     return np.array([guess_yc[0], guess_yc[1], guess_yc[2], phi,
                      guess_yc[4], guess_yc[5], mu_S])

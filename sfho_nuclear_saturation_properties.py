@@ -53,25 +53,18 @@ def compute_saturation_fields(params: Optional[SFHoParams] = None,
     Returns:
         (sigma, omega, rho, phi) fields in MeV
     """
-    from sfho_eos import SFHoEOS
-    from general_eos_solver import solve_eos_point, EOSInput, EOSGuess, EquilibriumType
+    from sfho_eos import solve_sfho_fixed_yc, BARYONS_N
     
-    # Use nucleonic EOS for saturation properties
-    model = SFHoEOS(particle_content='nucleons', parametrization='sfho')
-    if params is not None:
-        model._params = params
+    if params is None:
+        params = get_sfho_nucleonic()
     
-    eos_input = EOSInput(n_B=n_B, T=T, Y_C=Y_C)
-    guess = EOSGuess(
-        sigma=30.0, omega=20.0, rho=0.0, phi=0.0,
-        mu_B=920.0, mu_Q=-1.0 if Y_C > 0.45 else -50.0
+    result = solve_sfho_fixed_yc(
+        n_B=n_B, Y_C=Y_C, T=T, params=params, particles=BARYONS_N,
+        include_electrons=False, include_photons=False
     )
     
-    result = solve_eos_point(
-        model, eos_input, 
-        eq_type=EquilibriumType.FIXED_YC_HADRONS_ONLY,
-        guess=guess, include_muons=False
-    )
+    if not result.converged:
+        raise RuntimeError(f"Failed to converge at n_B={n_B}, Y_C={Y_C}, T={T}")
     
     return result.sigma, result.omega, result.rho, result.phi
 
@@ -129,26 +122,17 @@ def find_saturation_density(params: Optional[SFHoParams] = None,
         n_sat in fm⁻³
     """
     from scipy.optimize import brentq
+    from sfho_eos import solve_sfho_fixed_yc, BARYONS_N
+    
+    if params is None:
+        params = get_sfho_nucleonic()
     
     def pressure_at_density(n_B: float) -> float:
-        sigma, omega, rho, phi = compute_saturation_fields(params, n_B=n_B, Y_C=0.5, T=0.01)
-        
-        from sfho_eos import SFHoEOS
-        from general_eos_solver import solve_eos_point, EOSInput, EOSGuess, EquilibriumType
-        
-        model = SFHoEOS(particle_content='nucleons', parametrization='sfho')
-        if params is not None:
-            model._params = params
-        
-        eos_input = EOSInput(n_B=n_B, T=0.01, Y_C=0.5)
-        guess = EOSGuess(sigma=sigma, omega=omega, rho=0.0, phi=0.0, mu_B=920.0, mu_Q=-1.0)
-        
-        result = solve_eos_point(
-            model, eos_input, 
-            eq_type=EquilibriumType.FIXED_YC_HADRONS_ONLY,
-            guess=guess, include_muons=False
+        result = solve_sfho_fixed_yc(
+            n_B=n_B, Y_C=0.5, T=0.01, params=params, particles=BARYONS_N,
+            include_electrons=False, include_photons=False
         )
-        return result.P_hadrons
+        return result.P_total  # For hadrons-only, P_total = P_hadrons
     
     # Find where P = 0
     n_sat = brentq(pressure_at_density, n_min, n_max)
@@ -157,74 +141,39 @@ def find_saturation_density(params: Optional[SFHoParams] = None,
 
 def compute_energy_per_baryon(params: Optional[SFHoParams], n_B: float, Y_C: float = 0.5) -> float:
     """Compute energy per baryon ε = e/n_B - M_N at given density and charge fraction."""
-    from sfho_eos import SFHoEOS
-    from general_eos_solver import solve_eos_point, EOSInput, EOSGuess, EquilibriumType
+    from sfho_eos import solve_sfho_fixed_yc, BARYONS_N
     
     if params is None:
         params = get_sfho_nucleonic()
     
     M_N = (params.m_n + params.m_p) / 2.0
     
-    model = SFHoEOS(particle_content='nucleons', parametrization='sfho')
-    model._params = params
-    
-    eos_input = EOSInput(n_B=n_B, T=0.01, Y_C=Y_C)
-    
-    # Adjust initial guess based on Y_C
-    # α = 1 - 2Y_C: PNM (Y_C=0, α=1), SNM (Y_C=0.5, α=0), PPM (Y_C=1, α=-1)
-    if Y_C < 0.1:  # Pure neutron matter
-        rho_guess = -8.0  # Negative rho (more neutrons)
-        mu_Q_guess = -80.0
-    elif Y_C > 0.9:  # Pure proton matter
-        rho_guess = 8.0   # Positive rho (more protons)
-        mu_Q_guess = 80.0
-    elif Y_C < 0.45:  # Neutron-rich
-        rho_guess = -5.0
-        mu_Q_guess = -50.0
-    elif Y_C > 0.55:  # Proton-rich
-        rho_guess = 5.0
-        mu_Q_guess = 50.0
-    else:  # Near symmetric
-        rho_guess = 0.0
-        mu_Q_guess = -1.0
-    
-    guess = EOSGuess(sigma=30.0, omega=20.0, rho=rho_guess, phi=0.0, mu_B=920.0, mu_Q=mu_Q_guess)
-    
-    result = solve_eos_point(
-        model, eos_input, 
-        eq_type=EquilibriumType.FIXED_YC_HADRONS_ONLY,
-        guess=guess, include_muons=False
+    result = solve_sfho_fixed_yc(
+        n_B=n_B, Y_C=Y_C, T=0.01, params=params, particles=BARYONS_N,
+        include_electrons=False, include_photons=False
     )
     
-    epsilon = result.e_hadrons / result.n_B - M_N
+    if not result.converged:
+        raise RuntimeError(f"Failed to converge at n_B={n_B}, Y_C={Y_C}")
+    
+    # For hadrons-only calculation (no electrons/photons), e_total = e_hadrons
+    epsilon = result.e_total / result.n_B - M_N
     return epsilon
 
 
 def compute_pressure(params: Optional[SFHoParams], n_B: float, Y_C: float = 0.5) -> float:
     """Compute pressure at given density and charge fraction."""
-    from sfho_eos import SFHoEOS
-    from general_eos_solver import solve_eos_point, EOSInput, EOSGuess, EquilibriumType
+    from sfho_eos import solve_sfho_fixed_yc, BARYONS_N
     
     if params is None:
         params = get_sfho_nucleonic()
     
-    model = SFHoEOS(particle_content='nucleons', parametrization='sfho')
-    model._params = params
-    
-    eos_input = EOSInput(n_B=n_B, T=0.01, Y_C=Y_C)
-    
-    rho_guess = -5.0 if Y_C < 0.45 else 0.0
-    mu_Q_guess = -50.0 if Y_C < 0.45 else -1.0
-    
-    guess = EOSGuess(sigma=30.0, omega=20.0, rho=rho_guess, phi=0.0, mu_B=920.0, mu_Q=mu_Q_guess)
-    
-    result = solve_eos_point(
-        model, eos_input, 
-        eq_type=EquilibriumType.FIXED_YC_HADRONS_ONLY,
-        guess=guess, include_muons=False
+    result = solve_sfho_fixed_yc(
+        n_B=n_B, Y_C=Y_C, T=0.01, params=params, particles=BARYONS_N,
+        include_electrons=False, include_photons=False
     )
     
-    return result.P_hadrons
+    return result.P_total  # For hadrons-only, P_total = P_hadrons
 
 
 def compute_symmetry_energy(params: Optional[SFHoParams], n_B: float) -> float:
