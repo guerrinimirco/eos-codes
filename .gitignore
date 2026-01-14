@@ -10,9 +10,11 @@ __pycache__/
 
 # Output Directories (Large generated files)
 output/
+sfho_tables_output/
 eos_plots/
 compose_comparison_plots/
 test_plots/
+_old_codes/
 
 # Virtual Environments
 venv/

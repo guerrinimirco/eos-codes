@@ -20,7 +20,7 @@ References:
 - Steiner, Hempel, Fischer, ApJ 774 (2013) 17
 """
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
 
 from general_physics_constants import hc, hc3
@@ -60,7 +60,6 @@ class HadronState:
         return (f"HadronState(n={self.n:.4e}, ns={self.ns:.4e}, "
                 f"P={self.P:.4e}, e={self.e:.4e})")
 
-
 @dataclass
 class HadronThermoResult:
     """
@@ -69,7 +68,7 @@ class HadronThermoResult:
     Attributes:
         states: Dictionary of individual hadron states
         n_B: Total baryon number density (fm⁻³)
-        n_Q: Total charge density (fm⁻³)
+        n_C: Total charge density (fm⁻³)
         n_S: Total strangeness density (fm⁻³)
         P_hadrons: Total hadron pressure (MeV/fm³)
         e_hadrons: Total hadron energy density (MeV/fm³)
@@ -81,7 +80,7 @@ class HadronThermoResult:
     """
     states: Dict[str, HadronState]
     n_B: float       # Total baryon density
-    n_Q: float       # Total charge density
+    n_C: float       # Total charge density
     n_S: float       # Total strangeness density
     P_hadrons: float # Hadron pressure
     e_hadrons: float # Hadron energy density
@@ -91,31 +90,30 @@ class HadronThermoResult:
     src_rho: float   # ρ source
     src_phi: float   # φ source
 
-
 @dataclass
 class MesonThermoResult:
     """
     Thermodynamic result for pseudoscalar mesons (π, K, η).
     
     Mesons are treated as free Bose gas with chemical potentials:
-    - π⁺: μ = +μ_Q
-    - π⁻: μ = -μ_Q
+    - π⁺: μ = +μ_C
+    - π⁻: μ = -μ_C
     - π⁰: μ = 0
-    - K⁺: μ = +μ_Q - μ_S
+    - K⁺: μ = +μ_C - μ_S
     - K⁰: μ = -μ_S
-    - K⁻: μ = -μ_Q + μ_S
+    - K⁻: μ = -μ_C + μ_S
     - K̄⁰: μ = +μ_S
     - η, η': μ = 0
     
     Attributes:
-        n_Q_mesons: Total meson charge density (fm⁻³)
+        n_C_mesons: Total meson charge density (fm⁻³)
         n_S_mesons: Total meson strangeness density (fm⁻³)
         P_mesons: Total meson pressure (MeV/fm³)
         e_mesons: Total meson energy density (MeV/fm³)
         s_mesons: Total meson entropy density (fm⁻³)
         densities: Dictionary of individual meson densities
     """
-    n_Q_mesons: float  # Meson charge density
+    n_C_mesons: float  # Meson charge density
     n_S_mesons: float  # Meson strangeness density
     P_mesons: float    # Meson pressure
     e_mesons: float    # Meson energy density
@@ -123,13 +121,50 @@ class MesonThermoResult:
     densities: Dict[str, float]  # Individual meson densities
 
 
+@dataclass
+class SFHoThermo:
+    """
+    Full thermodynamic result for SFHo hadronic matter.
+    
+    This is the SFHo equivalent of ZLThermo and VMITThermo.
+    The meson fields (sigma, omega, rho, phi) play the same role as
+    particle densities (n_p, n_n or n_u, n_d, n_s) in ZL/vMIT.
+    """
+    # Meson fields
+    sigma: float = 0.0
+    omega: float = 0.0
+    rho: float = 0.0
+    phi: float = 0.0
+    # Densities
+    n_B: float = 0.0
+    n_C: float = 0.0
+    n_S: float = 0.0
+    Y_C: float = 0.0
+    Y_S: float = 0.0
+    # Temperature
+    T: float = 0.0
+    # Chemical potentials
+    mu_B: float = 0.0
+    mu_C: float = 0.0
+    mu_S: float = 0.0
+    # Thermodynamics
+    P: float = 0.0
+    e: float = 0.0
+    s: float = 0.0
+    f: float = 0.0
+    # Individual hadron states (name -> HadronState)
+    states: Dict[str, HadronState] = field(default_factory=dict)
+
+
+
 # =============================================================================
 # MAIN THERMODYNAMICS FUNCTIONS
 # =============================================================================
 
+
 def compute_hadron_thermo(
     T: float,
-    mu_B: float, mu_Q: float, mu_S: float,
+    mu_B: float, mu_C: float, mu_S: float,
     sigma: float, omega: float, rho: float, phi: float,
     particles: List[Particle],
     params: SFHoParams
@@ -140,14 +175,14 @@ def compute_hadron_thermo(
     Given temperature, chemical potentials, and meson fields, this function:
     1. Computes effective masses: M*_j = m_j - g_σj × σ
     2. Computes effective chemical potentials: 
-       μ*_j = B_j×μ_B + Q_j×μ_Q + S_j×μ_S - g_ωj×ω - g_ρj×I₃j×ρ - g_φj×φ
+       μ*_j = B_j×μ_B + C_j×μ_C + S_j×μ_S - g_ωj×ω - g_ρj×I₃j×ρ - g_φj×φ
     3. Evaluates Fermi integrals for (n, P, e, s, n_s)
     4. Computes source terms for field equations
     
     Args:
         T: Temperature (MeV)
         mu_B: Baryon chemical potential (MeV)
-        mu_Q: Charge chemical potential (MeV)
+        mu_C: Charge chemical potential (MeV)
         mu_S: Strangeness chemical potential (MeV)
         sigma: σ-meson field (MeV)
         omega: ω-meson field (MeV)
@@ -163,7 +198,7 @@ def compute_hadron_thermo(
     
     # Initialize totals
     n_B_tot = 0.0
-    n_Q_tot = 0.0
+    n_C_tot = 0.0
     n_S_tot = 0.0
     P_tot = 0.0
     e_tot = 0.0
@@ -197,13 +232,13 @@ def compute_hadron_thermo(
             m_eff = 1e-3  # Small positive value
         
         # 4. Effective chemical potential
-        # μ_j = B_j×μ_B + Q_j×μ_Q + S_j×μ_S
-        mu_nonint = p.baryon_no * mu_B + p.charge * mu_Q + p.strangeness * mu_S
+        # μ_j = B_j×μ_B + C_j×μ_C + S_j×μ_S
+        mu_physical = p.baryon_no * mu_B + p.charge * mu_C + p.strangeness * mu_S
         
         # Vector field shifts
         # μ* = μ - g_ω×ω - g_ρ×I₃×ρ - g_φ×φ
         vector_shift = g_w * omega + g_r * p.isospin_3 * rho + g_p * phi
-        mu_eff = mu_nonint - vector_shift
+        mu_eff = mu_physical - vector_shift
         
         # 5. Compute Fermi integrals
         # solve_fermi_jel returns (n, P, e, s, ns)
@@ -218,7 +253,7 @@ def compute_hadron_thermo(
         # 5. Accumulate totals
         # n is the NET number density (particles - antiparticles)
         n_B_tot += p.baryon_no * n
-        n_Q_tot += p.charge * n
+        n_C_tot += p.charge * n
         n_S_tot += p.strangeness * n
         P_tot += P
         e_tot += e
@@ -236,7 +271,7 @@ def compute_hadron_thermo(
     return HadronThermoResult(
         states=states,
         n_B=n_B_tot,
-        n_Q=n_Q_tot,
+        n_C=n_C_tot,
         n_S=n_S_tot,
         P_hadrons=P_tot,
         e_hadrons=e_tot,
@@ -373,7 +408,7 @@ def compute_meson_contribution(
 
 def compute_pseudoscalar_meson_thermo(
     T: float,
-    mu_Q: float, mu_S: float,
+    mu_C: float, mu_S: float,
     omega: float, rho: float,
     params: SFHoParams,
     include_pions: bool = True,
@@ -387,14 +422,14 @@ def compute_pseudoscalar_meson_thermo(
     shifted by the vector meson fields:
     
     Pions (I=1, S=0):
-        π⁺: μ_eff = +μ_Q - g_ρN × ρ
-        π⁻: μ_eff = -μ_Q + g_ρN × ρ
+        π⁺: μ_eff = +μ_C - g_ρN × ρ
+        π⁻: μ_eff = -μ_C + g_ρN × ρ
         π⁰: μ_eff = 0
         
     Kaons (I=1/2, S=±1):
-        K⁺:  μ_eff = +μ_Q - μ_S - (g_ωN - g_ωΛ) × ω - (1/2) g_ρN × ρ
+        K⁺:  μ_eff = +μ_C - μ_S - (g_ωN - g_ωΛ) × ω - (1/2) g_ρN × ρ
         K⁰:  μ_eff = -μ_S - (g_ωN - g_ωΛ) × ω + (1/2) g_ρN × ρ
-        K⁻:  μ_eff = -μ_Q + μ_S + (g_ωN - g_ωΛ) × ω + (1/2) g_ρN × ρ
+        K⁻:  μ_eff = -μ_C + μ_S + (g_ωN - g_ωΛ) × ω + (1/2) g_ρN × ρ
         K̄⁰:  μ_eff = +μ_S + (g_ωN - g_ωΛ) × ω - (1/2) g_ρN × ρ
         
     Eta (I=0, S=0):
@@ -405,7 +440,7 @@ def compute_pseudoscalar_meson_thermo(
     
     Args:
         T: Temperature (MeV)
-        mu_Q: Charge chemical potential (MeV)
+        mu_C: Charge chemical potential (MeV)
         mu_S: Strangeness chemical potential (MeV)
         omega: ω-meson field (MeV)
         rho: ρ-meson field (MeV)
@@ -418,7 +453,7 @@ def compute_pseudoscalar_meson_thermo(
         MesonThermoResult with all meson thermodynamics
     """
     # Initialize totals
-    n_Q_tot = 0.0
+    n_C_tot = 0.0
     n_S_tot = 0.0
     P_tot = 0.0
     e_tot = 0.0
@@ -427,7 +462,7 @@ def compute_pseudoscalar_meson_thermo(
     
     if T <= 0:
         return MesonThermoResult(
-            n_Q_mesons=0.0, n_S_mesons=0.0,
+            n_C_mesons=0.0, n_S_mesons=0.0,
             P_mesons=0.0, e_mesons=0.0, s_mesons=0.0,
             densities={}
         )
@@ -444,24 +479,24 @@ def compute_pseudoscalar_meson_thermo(
     if include_pions:
         m_pi = params.m_pi_pm
         
-        # π⁺: μ_eff = +μ_Q - g_ρN × ρ
-        mu_pip_eff = mu_Q - g_rho_N * rho
+        # π⁺: μ_eff = +μ_C - g_ρN × ρ
+        mu_pip_eff = mu_C - g_rho_N * rho
         if abs(mu_pip_eff) < m_pi:  # No condensation
             n_pip, P_pip, e_pip, s_pip, _ = solve_bose_jel(mu_pip_eff, T, m_pi, g=1.0, include_antiparticles=False)
             densities['pi+'] = n_pip
-            n_Q_tot += n_pip  # Q = +1
+            n_C_tot += n_pip  # Q = +1
             P_tot += P_pip
             e_tot += e_pip
             s_tot += s_pip
         else:
             densities['pi+'] = 0.0
         
-        # π⁻: μ_eff = -μ_Q + g_ρN × ρ
-        mu_pim_eff = -mu_Q + g_rho_N * rho
+        # π⁻: μ_eff = -μ_C + g_ρN × ρ
+        mu_pim_eff = -mu_C + g_rho_N * rho
         if abs(mu_pim_eff) < m_pi:
             n_pim, P_pim, e_pim, s_pim, _ = solve_bose_jel(mu_pim_eff, T, m_pi, g=1.0, include_antiparticles=False)
             densities['pi-'] = n_pim
-            n_Q_tot -= n_pim  # Q = -1
+            n_C_tot -= n_pim  # Q = -1
             P_tot += P_pim
             e_tot += e_pim
             s_tot += s_pim
@@ -481,12 +516,12 @@ def compute_pseudoscalar_meson_thermo(
         m_k_pm = params.m_kaon_pm
         m_k_0 = params.m_kaon_0
         
-        # K⁺ (us̄): Q=+1, S=-1 → μ_eff = μ_Q - μ_S - Δg_ω × ω - (1/2) g_ρN × ρ
-        mu_kp_eff = mu_Q - mu_S - delta_g_omega * omega - 0.5 * g_rho_N * rho
+        # K⁺ (us̄): Q=+1, S=-1 → μ_eff = μ_C - μ_S - Δg_ω × ω - (1/2) g_ρN × ρ
+        mu_kp_eff = mu_C - mu_S - delta_g_omega * omega - 0.5 * g_rho_N * rho
         if abs(mu_kp_eff) < m_k_pm:
             n_kp, P_kp, e_kp, s_kp, _ = solve_bose_jel(mu_kp_eff, T, m_k_pm, g=1.0, include_antiparticles=False)
             densities['K+'] = n_kp
-            n_Q_tot += n_kp      # Q = +1
+            n_C_tot += n_kp      # Q = +1
             n_S_tot -= n_kp      # S = -1
             P_tot += P_kp
             e_tot += e_kp
@@ -506,12 +541,12 @@ def compute_pseudoscalar_meson_thermo(
         else:
             densities['K0'] = 0.0
         
-        # K⁻ (ūs): Q=-1, S=+1 → μ_eff = -μ_Q + μ_S + Δg_ω × ω + (1/2) g_ρN × ρ
-        mu_km_eff = -mu_Q + mu_S + delta_g_omega * omega + 0.5 * g_rho_N * rho
+        # K⁻ (ūs): Q=-1, S=+1 → μ_eff = -μ_C + μ_S + Δg_ω × ω + (1/2) g_ρN × ρ
+        mu_km_eff = -mu_C + mu_S + delta_g_omega * omega + 0.5 * g_rho_N * rho
         if abs(mu_km_eff) < m_k_pm:
             n_km, P_km, e_km, s_km, _ = solve_bose_jel(mu_km_eff, T, m_k_pm, g=1.0, include_antiparticles=False)
             densities['K-'] = n_km
-            n_Q_tot -= n_km      # Q = -1
+            n_C_tot -= n_km      # Q = -1
             n_S_tot += n_km      # S = +1
             P_tot += P_km
             e_tot += e_km
@@ -538,7 +573,7 @@ def compute_pseudoscalar_meson_thermo(
         n_eta, P_eta, e_eta, s_eta, _ = solve_bose_jel(0.0, T, m_eta, g=1.0, include_antiparticles=False)
         densities['eta'] = n_eta
         P_tot += P_eta
-        e_tot += e_eta
+        e_tot 
         s_tot += s_eta
         
         # η'
@@ -550,7 +585,7 @@ def compute_pseudoscalar_meson_thermo(
         s_tot += s_etap
     
     return MesonThermoResult(
-        n_Q_mesons=n_Q_tot,
+        n_C_mesons=n_C_tot,
         n_S_mesons=n_S_tot,
         P_mesons=P_tot,
         e_mesons=e_tot,
@@ -559,36 +594,39 @@ def compute_pseudoscalar_meson_thermo(
     )
 
 
-def compute_total_pressure(
-    T: float,
-    mu_B: float, mu_Q: float, mu_S: float,
+def compute_sfho_thermo_from_mu_fields(
+    mu_B: float, mu_C: float, mu_S: float,
     sigma: float, omega: float, rho: float, phi: float,
+    T: float,
     particles: List[Particle],
     params: SFHoParams,
     include_pseudoscalar_mesons: bool = False
-) -> Tuple[float, float, float, HadronThermoResult, Optional[MesonThermoResult]]:
+) -> SFHoThermo:
     """
-    Compute total hadronic pressure, energy density, and entropy density.
+    Compute full SFHo thermodynamics from (μ_B, μ_C, μ_S, σ, ω, ρ, φ, T).
     
-    P_total = P_baryons + P_mean_field_mesons + P_pseudoscalar_mesons
-    e_total = e_baryons + e_mean_field_mesons + e_pseudoscalar_mesons
-    s_total = s_baryons + s_pseudoscalar_mesons
+    This is the main user-facing function that takes all inputs and returns
+    complete thermodynamic results. Analogous to ZL's compute_zl_thermo_from_mu_n()
+    and vMIT's compute_vmit_thermo_from_mu_n().
+    
+    Note: Having meson fields as inputs plays the same role as densities (n_p, n_n)
+          in ZL or quark densities (n_u, n_d, n_s) in vMIT. In solvers, we require
+          that field_residuals(σ, ω, ρ, φ) = 0.
     
     Args:
+        mu_B, mu_C, mu_S: Conserved charge chemical potentials (MeV)
+        sigma, omega, rho, phi: Meson fields (MeV)
         T: Temperature (MeV)
-        mu_B, mu_Q, mu_S: Chemical potentials (MeV)
-        sigma, omega, rho, phi: Mean-field meson fields (MeV)
         particles: List of baryon species
         params: Model parameters
-        include_pseudoscalar_mesons: If True, include π, K, η contributions
+        include_pseudoscalar_mesons: Include π, K, η contributions
         
     Returns:
-        Tuple of (P_total, e_total, s_total, hadron_result, meson_result)
-        meson_result is None if include_pseudoscalar_mesons=False
+        SFHoThermo with full thermodynamic state
     """
-    # Baryon contributions
+    # Compute baryon thermodynamics
     hadron_result = compute_hadron_thermo(
-        T, mu_B, mu_Q, mu_S, sigma, omega, rho, phi, particles, params
+        T, mu_B, mu_C, mu_S, sigma, omega, rho, phi, particles, params
     )
     
     # Mean-field meson contributions (σ, ω, ρ, φ)
@@ -599,25 +637,46 @@ def compute_total_pressure(
     e_total = hadron_result.e_hadrons + e_mf
     s_total = hadron_result.s_hadrons
     
+    # Conserved densities start from hadron contributions
+    n_B = hadron_result.n_B
+    n_C = hadron_result.n_C
+    n_S = hadron_result.n_S
+    
     # Optional: pseudoscalar mesons (π, K, η)
-    meson_result = None
     if include_pseudoscalar_mesons:
-        meson_result = compute_pseudoscalar_meson_thermo(T, mu_Q, mu_S, omega, rho, params)
+        meson_result = compute_pseudoscalar_meson_thermo(T, mu_C, mu_S, omega, rho, params)
         P_total += meson_result.P_mesons
         e_total += meson_result.e_mesons
         s_total += meson_result.s_mesons
+        n_C += meson_result.n_C_mesons
+        n_S += meson_result.n_S_mesons
     
-    return P_total, e_total, s_total, hadron_result, meson_result
+    # Free energy density
+    f_total = e_total - s_total * T
+    
+    Y_C = n_C / n_B if n_B > 1e-15 else 0.0
+    Y_S = n_S / n_B if n_B > 1e-15 else 0.0
+    
+    return SFHoThermo(
+        sigma=sigma, omega=omega, rho=rho, phi=phi,
+        n_B=n_B, n_C=n_C, n_S=n_S,
+        Y_C=Y_C, Y_S=Y_S,
+        T=T,
+        mu_B=mu_B, mu_C=mu_C, mu_S=mu_S,
+        P=P_total, e=e_total, s=s_total, f=f_total,
+        states=hadron_result.states
+    )
 
 
 # =============================================================================
 # CONVENIENCE FUNCTIONS
 # =============================================================================
 
+
 def get_residual_vector(
     fields: np.ndarray,
     T: float,
-    mu_B: float, mu_Q: float, mu_S: float,
+    mu_B: float, mu_C: float, mu_S: float,
     particles: List[Particle],
     params: SFHoParams
 ) -> np.ndarray:
@@ -629,7 +688,7 @@ def get_residual_vector(
     Args:
         fields: Array [sigma, omega, rho, phi] of meson fields (MeV)
         T: Temperature (MeV)
-        mu_B, mu_Q, mu_S: Chemical potentials (MeV)
+        mu_B, mu_C, mu_S: Chemical potentials (MeV)
         particles: List of hadron species
         params: Model parameters
         
@@ -640,7 +699,7 @@ def get_residual_vector(
     
     # Compute hadron thermodynamics to get source terms
     result = compute_hadron_thermo(
-        T, mu_B, mu_Q, mu_S, sigma, omega, rho, phi, particles, params
+        T, mu_B, mu_C, mu_S, sigma, omega, rho, phi, particles, params
     )
     
     # Compute field equation residuals
@@ -671,7 +730,7 @@ if __name__ == "__main__":
     # Test parameters
     T = 10.0  # MeV
     mu_B = 950.0  # MeV (typical for n ~ n_sat)
-    mu_Q = -20.0  # MeV (slightly neutron-rich)
+    mu_C = -20.0  # MeV (slightly neutron-rich)
     mu_S = 0.0    # MeV
     
     # Initial guess for fields (MeV)
@@ -687,14 +746,14 @@ if __name__ == "__main__":
     nucleons = [Proton, Neutron]
     
     result = compute_hadron_thermo(
-        T, mu_B, mu_Q, mu_S, sigma, omega, rho, phi, nucleons, params
+        T, mu_B, mu_C, mu_S, sigma, omega, rho, phi, nucleons, params
     )
     
-    print(f"T = {T} MeV, μ_B = {mu_B} MeV, μ_Q = {mu_Q} MeV")
+    print(f"T = {T} MeV, μ_B = {mu_B} MeV, μ_C = {mu_C} MeV")
     print(f"σ = {sigma} MeV, ω = {omega} MeV, ρ = {rho} MeV")
     print()
     print(f"n_B = {result.n_B:.4e} fm⁻³")
-    print(f"n_Q = {result.n_Q:.4e} fm⁻³")
+    print(f"n_C = {result.n_C:.4e} fm⁻³")
     print(f"P_hadrons = {result.P_hadrons:.4e} MeV/fm³")
     print(f"e_hadrons = {result.e_hadrons:.4e} MeV/fm³")
     print(f"s_hadrons = {result.s_hadrons:.4e} fm⁻³")
@@ -732,10 +791,10 @@ if __name__ == "__main__":
     baryons = [Proton, Neutron, Lambda, SigmaP, Sigma0, SigmaM, Xi0, XiM]
     
     result = compute_hadron_thermo(
-        T, mu_B, mu_Q, mu_S, sigma, omega, rho, phi, baryons, params
+        T, mu_B, mu_C, mu_S, sigma, omega, rho, phi, baryons, params
     )
     
-    print(f"T = {T} MeV, μ_B = {mu_B} MeV, μ_Q = {mu_Q} MeV, μ_S = {mu_S} MeV")
+    print(f"T = {T} MeV, μ_B = {mu_B} MeV, μ_C = {mu_C} MeV, μ_S = {mu_S} MeV")
     print()
     print(f"n_B = {result.n_B:.4e} fm⁻³")
     print(f"n_S = {result.n_S:.4e} fm⁻³")
@@ -754,7 +813,7 @@ if __name__ == "__main__":
     all_baryons = baryons + [DeltaPP, DeltaP, Delta0, DeltaM]
     
     result = compute_hadron_thermo(
-        T, mu_B, mu_Q, mu_S, sigma, omega, rho, phi, all_baryons, params
+        T, mu_B, mu_C, mu_S, sigma, omega, rho, phi, all_baryons, params
     )
     
     print(f"Total baryons: {len(all_baryons)}")
@@ -771,15 +830,15 @@ if __name__ == "__main__":
     print("-" * 50)
     
     T_high = 50.0  # Higher T to have significant meson density
-    mu_Q_test = 10.0
+    mu_C_test = 10.0
     mu_S_test = 20.0
     
-    print(f"T = {T_high} MeV, μ_Q = {mu_Q_test} MeV, μ_S = {mu_S_test} MeV")
+    print(f"T = {T_high} MeV, μ_C = {mu_C_test} MeV, μ_S = {mu_S_test} MeV")
     print()
     
-    meson_result = compute_pseudoscalar_meson_thermo(T_high, mu_Q_test, mu_S_test, params)
+    meson_result = compute_pseudoscalar_meson_thermo(T_high, mu_C_test, mu_S_test, params)
     
-    print(f"n_Q (mesons) = {meson_result.n_Q_mesons:.4e} fm⁻³")
+    print(f"n_C (mesons) = {meson_result.n_C_mesons:.4e} fm⁻³")
     print(f"n_S (mesons) = {meson_result.n_S_mesons:.4e} fm⁻³")
     print(f"P_mesons = {meson_result.P_mesons:.4e} MeV/fm³")
     print(f"e_mesons = {meson_result.e_mesons:.4e} MeV/fm³")
@@ -790,13 +849,13 @@ if __name__ == "__main__":
         if n > 1e-10:
             print(f"  {name:10s}: n = {n:.4e} fm⁻³")
     
-    # Test compute_total_pressure with mesons
+    # Test compute_sfho_thermo_from_mu_fields with mesons
     print("\n" + "=" * 70)
     print("TEST 5: Total EOS with baryons and mesons")
     print("-" * 50)
     
-    P_tot, e_tot, s_tot, hadron_res, meson_res = compute_total_pressure(
-        T_high, mu_B, mu_Q_test, mu_S_test, sigma, omega, rho, phi,
+    P_tot, e_tot, s_tot, hadron_res, meson_res = compute_sfho_thermo_from_mu_fields(
+        T_high, mu_B, mu_C_test, mu_S_test, sigma, omega, rho, phi,
         all_baryons, params, include_pseudoscalar_mesons=True
     )
     

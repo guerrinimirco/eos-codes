@@ -1,7 +1,7 @@
 """
 sfho_compute_tables.py
 =====================
-User-friendly script for generating EOS tables with OPTIMIZED initial guesses.
+User-friendly script for generating SFHo EOS tables with OPTIMIZED initial guesses.
 
 Key speed optimization: Uses solutions from previous parameter values (T, Y_C)
 as initial guesses for the next, dramatically reducing solver iterations.
@@ -21,11 +21,27 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Union, Dict, Any, Tuple
 from itertools import product
 
-# Import EOS modules
-from sfho_eos import SFHoEOS
-from general_eos_solver import (
-    EOSResult, EOSInput, EOSGuess, TableConfig, PrintLevel, EquilibriumType,
-    solve_eos_point
+# Import SFHo EOS modules
+from sfho_eos import (
+    SFHoEOSResult,
+    solve_sfho_beta_eq,
+    solve_sfho_fixed_yc,
+    solve_sfho_fixed_yc_ys,
+    solve_sfho_trapped_neutrinos,
+    result_to_guess,
+    get_default_guess_beta_eq,
+    get_default_guess_fixed_yc,
+    get_default_guess_fixed_yc_ys,
+    get_default_guess_trapped,
+    BARYONS_N, BARYONS_NY, BARYONS_NYD
+)
+from sfho_parameters import (
+    SFHoParams, 
+    get_sfho_nucleonic, 
+    get_sfhoy_fortin,
+    get_sfhoy_star_fortin,
+    get_sfho_2fam_phi,
+    get_sfho_2fam
 )
 
 
@@ -35,11 +51,17 @@ from general_eos_solver import (
 @dataclass
 class TableSettings:
     """
-    Configuration for EOS table generation (supports multi-dimensional grids).
+    Configuration for SFHo EOS table generation (supports multi-dimensional grids).
     
     Speed optimizations:
     - Within n_B: uses quadratic extrapolation from previous 3 points
     - Across parameters: uses solution at same n_B from previous (T, Y_C, ...) as guess
+    
+    Equilibrium types:
+    - 'beta_eq': Beta equilibrium with charge neutrality
+    - 'fixed_yc': Fixed charge fraction Y_C (hadrons only)
+    - 'fixed_yc_ys': Fixed Y_C and Y_S (requires hyperons)
+    - 'trapped_neutrinos': Trapped neutrinos with fixed Y_L
     
     Custom parametrization:
         Use custom_params to pass a SFHoParams object directly. Example:
@@ -52,13 +74,13 @@ class TableSettings:
         )
         settings = TableSettings(
             custom_params=my_params,
-            particle_content='nucleons_hyperons_deltas'
+            particle_content='nucleons_hyperons'
         )
     """
     # Model selection
-    parametrization: str = 'sfho'        # Used if custom_params is None
-    particle_content: str = 'nucleons'
-    equilibrium: str = 'beta_eq'
+    parametrization: str = 'sfho'        # 'sfho', 'sfhoy', 'sfhoy_star', '2fam_phi'
+    particle_content: str = 'nucleons'   # 'nucleons', 'nucleons_hyperons', 'nucleons_hyperons_deltas'
+    equilibrium: str = 'beta_eq'         # 'beta_eq', 'fixed_yc', 'fixed_yc_ys', 'trapped_neutrinos'
     custom_params: Any = None            # SFHoParams object for custom parametrization
     
     # Grid definition
@@ -66,13 +88,16 @@ class TableSettings:
     T_values: List[float] = field(default_factory=lambda: [10.0])
     
     # Constraint parameters - can be single values OR arrays for multidimensional tables
-    Y_Q_values: Union[float, List[float], None] = None
+    Y_C_values: Union[float, List[float], None] = None
     Y_S_values: Union[float, List[float], None] = None
     Y_L_values: Union[float, List[float], None] = None
-    Y_C_values: Union[float, List[float], None] = None
     
     # Options
-    include_muons: bool = True
+    include_muons: bool = False
+    include_photons: bool = True
+    include_electrons: bool = False      # For fixed_yc modes: add electrons for charge neutrality
+    include_thermal_neutrinos: bool = False  # Add thermal neutrinos with μ_ν=0
+    include_pseudoscalar_mesons: bool = False
     
     # Output control
     print_results: bool = True
@@ -86,9 +111,9 @@ class TableSettings:
     output_columns: List[str] = field(default_factory=lambda: [
         'n_B', 'T', 
         'sigma', 'omega', 'rho', 'phi',
-        'mu_B', 'mu_C', 'mu_S', 'mu_Q', 'mu_L',
+        'mu_B', 'mu_C', 'mu_S', 'mu_e', 'mu_nu',
         'P_total', 'e_total', 's_total',
-        'Y_C', 'Y_S', 'Y_Q', 'Y_L', 
+        'Y_C', 'Y_S', 'Y_L', 
         'converged'
     ])
 
@@ -102,134 +127,164 @@ def _to_list(val):
     return [val]
 
 
-def _result_to_guess(result: EOSResult) -> EOSGuess:
-    """Convert EOSResult to EOSGuess for initial guess propagation."""
-    return EOSGuess(
-        sigma=result.sigma,
-        omega=result.omega,
-        rho=result.rho,
-        phi=result.phi,
-        mu_B=result.mu_B,
-        mu_Q=result.mu_Q,
-        mu_S=result.mu_S,
-        mu_L=result.mu_L
-    )
-
-
-def _get_eq_type(eq_str: str) -> EquilibriumType:
-    """Convert equilibrium string to EquilibriumType."""
-    eq_map = {
-        'beta_eq': EquilibriumType.BETA_EQ,
-        'fixed_yq': EquilibriumType.FIXED_YQ,
-        'fixed_yq_ys': EquilibriumType.FIXED_YQ_YS,
-        'trapped_neutrinos': EquilibriumType.BETA_EQ_TRAPPED,
-        'fixed_yc_hadrons_only': EquilibriumType.FIXED_YC_HADRONS_ONLY,
-        'fixed_yc_neutral': EquilibriumType.FIXED_YC_NEUTRAL,
-        'fixed_yc_ys': EquilibriumType.FIXED_YC_YS,
+def _get_params(settings: TableSettings) -> SFHoParams:
+    """Get SFHoParams from settings."""
+    if settings.custom_params is not None:
+        return settings.custom_params
+    
+    param_map = {
+        'sfho': get_sfho_nucleonic,
+        'sfhoy': get_sfhoy_fortin,
+        'sfhoy_star': get_sfhoy_star_fortin,
+        '2fam_phi': get_sfho_2fam_phi,
+        '2fam': get_sfho_2fam,
     }
-    return eq_map[eq_str.lower()]
+    
+    if settings.parametrization.lower() in param_map:
+        return param_map[settings.parametrization.lower()]()
+    else:
+        raise ValueError(f"Unknown parametrization: {settings.parametrization}")
 
 
-def _extrapolate_guess_from_array(
+def _get_particles(settings: TableSettings) -> list:
+    """Get particle list from settings."""
+    particle_map = {
+        'nucleons': BARYONS_N,
+        'nucleons_hyperons': BARYONS_NY,
+        'nucleons_hyperons_deltas': BARYONS_NYD,
+    }
+    
+    if settings.particle_content.lower() in particle_map:
+        return particle_map[settings.particle_content.lower()]
+    else:
+        raise ValueError(f"Unknown particle content: {settings.particle_content}")
+
+
+def _result_to_guess_array(result: SFHoEOSResult, eq_type: str) -> np.ndarray:
+    """Convert SFHoEOSResult to guess array."""
+    return result_to_guess(result, eq_type)
+
+
+def _get_guess_linear_extrapolation(
     previous_solutions: List[np.ndarray],
     previous_nB: np.ndarray,
     current_nB: float
-) -> EOSGuess:
-    """Extrapolate initial guess from previous solutions using quadratic interpolation."""
-    n_prev = len(previous_solutions)
+) -> Optional[np.ndarray]:
+    """Linear extrapolation from last 2 points."""
+    if len(previous_solutions) < 2:
+        return None
     
-    if n_prev == 0:
-        return EOSGuess()
-    elif n_prev == 1:
-        sol = previous_solutions[-1]
-    elif n_prev == 2:
-        # Linear extrapolation
-        n1, n2 = previous_nB[-2], previous_nB[-1]
-        s1, s2 = previous_solutions[-2], previous_solutions[-1]
-        if abs(n2 - n1) > 1e-15:
-            slope = (s2 - s1) / (n2 - n1)
-            sol = s2 + slope * (current_nB - n2)
-        else:
-            sol = s2
-    else:
-        # Quadratic extrapolation using last 3 points (Lagrange)
-        n1, n2, n3 = previous_nB[-3], previous_nB[-2], previous_nB[-1]
-        s1, s2, s3 = previous_solutions[-3], previous_solutions[-2], previous_solutions[-1]
-        
-        denom1 = (n1 - n2) * (n1 - n3)
-        denom2 = (n2 - n1) * (n2 - n3)  
-        denom3 = (n3 - n1) * (n3 - n2)
-        
-        if abs(denom1) < 1e-30 or abs(denom2) < 1e-30 or abs(denom3) < 1e-30:
-            sol = s3
-        else:
-            L1 = ((current_nB - n2) * (current_nB - n3)) / denom1
-            L2 = ((current_nB - n1) * (current_nB - n3)) / denom2
-            L3 = ((current_nB - n1) * (current_nB - n2)) / denom3
-            sol = L1 * s1 + L2 * s2 + L3 * s3
+    n1, n2 = previous_nB[-2], previous_nB[-1]
+    s1, s2 = previous_solutions[-2], previous_solutions[-1]
     
-    return EOSGuess(
-        sigma=sol[0], omega=sol[1], rho=sol[2], phi=sol[3],
-        mu_B=sol[4], mu_Q=sol[5], mu_S=sol[6], mu_L=sol[7]
-    )
+    if abs(n2 - n1) > 1e-15:
+        slope = (s2 - s1) / (n2 - n1)
+        return s2 + slope * (current_nB - n2)
+    return None
+
+
+def _get_guess_previous(
+    previous_solutions: List[np.ndarray]
+) -> Optional[np.ndarray]:
+    """Return the most recent solution."""
+    if len(previous_solutions) > 0:
+        return previous_solutions[-1].copy()
+    return None
+
+
+def _get_guess_quadratic_extrapolation(
+    previous_solutions: List[np.ndarray],
+    previous_nB: np.ndarray,
+    current_nB: float
+) -> Optional[np.ndarray]:
+    """Quadratic extrapolation from last 3 points (Lagrange)."""
+    if len(previous_solutions) < 3:
+        return None
+    
+    n1, n2, n3 = previous_nB[-3], previous_nB[-2], previous_nB[-1]
+    s1, s2, s3 = previous_solutions[-3], previous_solutions[-2], previous_solutions[-1]
+    
+    denom1 = (n1 - n2) * (n1 - n3)
+    denom2 = (n2 - n1) * (n2 - n3)  
+    denom3 = (n3 - n1) * (n3 - n2)
+    
+    if abs(denom1) < 1e-30 or abs(denom2) < 1e-30 or abs(denom3) < 1e-30:
+        return None
+    
+    L1 = ((current_nB - n2) * (current_nB - n3)) / denom1
+    L2 = ((current_nB - n1) * (current_nB - n3)) / denom2
+    L3 = ((current_nB - n1) * (current_nB - n2)) / denom3
+    
+    return L1 * s1 + L2 * s2 + L3 * s3
+
+
+def _try_guess_strategies(
+    previous_solutions: List[np.ndarray],
+    previous_nB: np.ndarray,
+    current_nB: float
+) -> Optional[np.ndarray]:
+    """
+    Try guess strategies in order:
+    1. Linear extrapolation (best for smooth continuation)
+    2. Previous n_B result (safe fallback)
+    3. Quadratic extrapolation (for non-linear regions)
+    """
+    # Strategy 1: Linear extrapolation
+    guess = _get_guess_linear_extrapolation(previous_solutions, previous_nB, current_nB)
+    if guess is not None:
+        return guess
+    
+    # Strategy 2: Previous result
+    guess = _get_guess_previous(previous_solutions)
+    if guess is not None:
+        return guess
+    
+    # Strategy 3: Quadratic extrapolation
+    guess = _get_guess_quadratic_extrapolation(previous_solutions, previous_nB, current_nB)
+    if guess is not None:
+        return guess
+    
+    return None
 
 
 #==============================================================================
 # OPTIMIZED TABLE GENERATOR
 #==============================================================================
-def compute_table(settings: TableSettings) -> Dict[Tuple, List[EOSResult]]:
+def compute_table(settings: TableSettings) -> Dict[Tuple, List[SFHoEOSResult]]:
     """
-    Compute EOS table(s) with OPTIMIZED initial guesses.
+    Compute SFHo EOS table(s) with OPTIMIZED initial guesses.
     
     Speed optimizations:
     1. Within n_B sweep: quadratic extrapolation from last 3 points
     2. Across parameters: use solution at same n_B index from previous table
        (e.g., use T=10 solutions as guess for T=20)
     """
-    # Create model - use custom_params if provided, else use parametrization name
-    if settings.custom_params is not None:
-        model = SFHoEOS(
-            particle_content=settings.particle_content,
-            params=settings.custom_params
-        )
-    else:
-        model = SFHoEOS(
-            particle_content=settings.particle_content,
-            parametrization=settings.parametrization
-        )
-    
+    params = _get_params(settings)
+    particles = _get_particles(settings)
     eq_type_str = settings.equilibrium.lower()
-    eq_type = _get_eq_type(eq_type_str)
     
     # Build parameter grid
     T_list = list(settings.T_values)
     Y_C_list = _to_list(settings.Y_C_values)
     Y_S_list = _to_list(settings.Y_S_values)
-    Y_Q_list = _to_list(settings.Y_Q_values)
     Y_L_list = _to_list(settings.Y_L_values)
     
     # Determine grid structure
+    # Order: composition constraints (Y_C, Y_S, Y_L) outer, T inner
+    # This way cross-parameter guesses come from previous T at same Y_C,
+    # which is physically more sensible (T changes are more continuous)
     if eq_type_str == 'beta_eq':
         grid_params = list(product(T_list))
         param_names = ['T']
-    elif eq_type_str == 'fixed_yq':
-        grid_params = list(product(T_list, Y_Q_list))
-        param_names = ['T', 'Y_Q']
-    elif eq_type_str == 'fixed_yq_ys':
-        grid_params = list(product(T_list, Y_Q_list, Y_S_list))
-        param_names = ['T', 'Y_Q', 'Y_S']
-    elif eq_type_str == 'trapped_neutrinos':
-        grid_params = list(product(T_list, Y_L_list))
-        param_names = ['T', 'Y_L']
-    elif eq_type_str == 'fixed_yc_hadrons_only':
-        grid_params = list(product(T_list, Y_C_list))
-        param_names = ['T', 'Y_C']
-    elif eq_type_str == 'fixed_yc_neutral':
-        grid_params = list(product(T_list, Y_C_list))
-        param_names = ['T', 'Y_C']
+    elif eq_type_str == 'fixed_yc':
+        grid_params = list(product(Y_C_list, T_list))
+        param_names = ['Y_C', 'T']
     elif eq_type_str == 'fixed_yc_ys':
-        grid_params = list(product(T_list, Y_C_list, Y_S_list))
-        param_names = ['T', 'Y_C', 'Y_S']
+        grid_params = list(product(Y_C_list, Y_S_list, T_list))
+        param_names = ['Y_C', 'Y_S', 'T']
+    elif eq_type_str == 'trapped_neutrinos':
+        grid_params = list(product(Y_L_list, T_list))
+        param_names = ['Y_L', 'T']
     else:
         raise ValueError(f"Unknown equilibrium type: {settings.equilibrium}")
     
@@ -239,9 +294,10 @@ def compute_table(settings: TableSettings) -> Dict[Tuple, List[EOSResult]]:
     
     if settings.print_results:
         print("=" * 70)
-        print("EOS TABLE GENERATION (OPTIMIZED)")
+        print("SFHo EOS TABLE GENERATION (OPTIMIZED)")
         print("=" * 70)
-        print(f"\nModel: {model.name}")
+        print(f"\nModel: {params.name if hasattr(params, 'name') else settings.parametrization}")
+        print(f"Particles: {settings.particle_content}")
         print(f"Equilibrium: {settings.equilibrium}")
         print(f"\nDensity grid: {n_points} points")
         print(f"  n_B range: [{n_B_arr[0]:.4e}, {n_B_arr[-1]:.4e}] fm^-3")
@@ -255,12 +311,11 @@ def compute_table(settings: TableSettings) -> Dict[Tuple, List[EOSResult]]:
     previous_table_results = None  # Store results from previous parameter combination
     total_start = time.time()
     
-    for idx, params in enumerate(grid_params):
-        param_dict = dict(zip(param_names, params))
+    for idx, grid_param in enumerate(grid_params):
+        param_dict = dict(zip(param_names, grid_param))
         T = param_dict.get('T')
         Y_C = param_dict.get('Y_C')
         Y_S = param_dict.get('Y_S')
-        Y_Q = param_dict.get('Y_Q')
         Y_L = param_dict.get('Y_L')
         
         if settings.print_results:
@@ -271,57 +326,124 @@ def compute_table(settings: TableSettings) -> Dict[Tuple, List[EOSResult]]:
         start_time = time.time()
         results = []
         previous_solutions = []  # For within-table extrapolation
+        previous_nB_values = []  # n_B values corresponding to previous_solutions
         
         for i, n_B in enumerate(n_B_arr):
-            # Build EOSInput
-            eos_input = EOSInput(n_B=n_B, T=T, Y_Q=Y_Q, Y_S=Y_S, Y_L=Y_L, Y_C=Y_C)
-            
             # Determine initial guess (OPTIMIZED)
-            # Priority: 1) Previous table at same n_B (if converged)
-            #           2) Extrapolation within current table
-            #           3) Model default
+            # Priority for n_B > first point:
+            #   1. Linear extrapolation from previous n_B steps
+            #   2. Previous n_B result
+            #   3. Quadratic extrapolation
+            # Fallback: Cross-parameter guess or default
             
             guess = None
             
-            # Priority 1: Within-table extrapolation (smoothest continuation)
-            # This prevents jumps from propagating between Y_C slices
+            # Priority 1-3: Within-table strategies (linear, previous, quadratic)
             if len(previous_solutions) > 0:
-                guess = _extrapolate_guess_from_array(
-                    previous_solutions, n_B_arr[:i], n_B
+                guess = _try_guess_strategies(
+                    previous_solutions, np.array(previous_nB_values), n_B
                 )
             
-            # Priority 2: Cross-parameter guess (from previous table, same n_B index)
-            # Only used for first few points of new table
+            # Fallback: Cross-parameter guess (from previous table, same n_B index)
             if guess is None and previous_table_results is not None and i < len(previous_table_results):
                 prev_result = previous_table_results[i]
                 if prev_result.converged:
-                    guess = _result_to_guess(prev_result)
+                    guess = _result_to_guess_array(prev_result, eq_type_str)
             
-            # Fallback to model default
-            if guess is None:
-                guess = model.get_default_guess(n_B, T)
+            # Call appropriate solver
+            if eq_type_str == 'beta_eq':
+                default_guess = get_default_guess_beta_eq(n_B, T, params)
+                if guess is None:
+                    guess = default_guess
+                result = solve_sfho_beta_eq(
+                    n_B, T, params, particles,
+                    include_photons=settings.include_photons,
+                    include_muons=settings.include_muons,
+                    include_pseudoscalar_mesons=settings.include_pseudoscalar_mesons,
+                    initial_guess=guess
+                )
+                # Retry with default guess if first attempt failed
+                if not result.converged and not np.allclose(guess, default_guess):
+                    result = solve_sfho_beta_eq(
+                        n_B, T, params, particles,
+                        include_photons=settings.include_photons,
+                        include_muons=settings.include_muons,
+                        include_pseudoscalar_mesons=settings.include_pseudoscalar_mesons,
+                        initial_guess=default_guess
+                    )
+            elif eq_type_str == 'fixed_yc':
+                default_guess = get_default_guess_fixed_yc(n_B, Y_C, T, params)
+                if guess is None:
+                    guess = default_guess
+                result = solve_sfho_fixed_yc(
+                    n_B, Y_C, T, params, particles,
+                    include_electrons=settings.include_electrons,
+                    include_photons=settings.include_photons,
+                    include_thermal_neutrinos=settings.include_thermal_neutrinos,
+                    include_pseudoscalar_mesons=settings.include_pseudoscalar_mesons,
+                    initial_guess=guess
+                )
+                # Retry with default guess if first attempt failed
+                if not result.converged and not np.allclose(guess, default_guess):
+                    result = solve_sfho_fixed_yc(
+                        n_B, Y_C, T, params, particles,
+                        include_electrons=settings.include_electrons,
+                        include_photons=settings.include_photons,
+                        include_thermal_neutrinos=settings.include_thermal_neutrinos,
+                        include_pseudoscalar_mesons=settings.include_pseudoscalar_mesons,
+                        initial_guess=default_guess
+                    )
+            elif eq_type_str == 'fixed_yc_ys':
+                default_guess = get_default_guess_fixed_yc_ys(n_B, Y_C, Y_S, T, params)
+                if guess is None:
+                    guess = default_guess
+                result = solve_sfho_fixed_yc_ys(
+                    n_B, Y_C, Y_S, T, params, particles,
+                    include_electrons=settings.include_electrons,
+                    include_photons=settings.include_photons,
+                    include_thermal_neutrinos=settings.include_thermal_neutrinos,
+                    include_pseudoscalar_mesons=settings.include_pseudoscalar_mesons,
+                    initial_guess=guess
+                )
+                # Retry with default guess if first attempt failed
+                if not result.converged and not np.allclose(guess, default_guess):
+                    result = solve_sfho_fixed_yc_ys(
+                        n_B, Y_C, Y_S, T, params, particles,
+                        include_electrons=settings.include_electrons,
+                        include_photons=settings.include_photons,
+                        include_thermal_neutrinos=settings.include_thermal_neutrinos,
+                        include_pseudoscalar_mesons=settings.include_pseudoscalar_mesons,
+                        initial_guess=default_guess
+                    )
+            elif eq_type_str == 'trapped_neutrinos':
+                default_guess = get_default_guess_trapped(n_B, Y_L, T, params)
+                if guess is None:
+                    guess = default_guess
+                result = solve_sfho_trapped_neutrinos(
+                    n_B, Y_L, T, params, particles,
+                    include_photons=settings.include_photons,
+                    include_pseudoscalar_mesons=settings.include_pseudoscalar_mesons,
+                    initial_guess=guess
+                )
+                # Retry with default guess if first attempt failed
+                if not result.converged and not np.allclose(guess, default_guess):
+                    result = solve_sfho_trapped_neutrinos(
+                        n_B, Y_L, T, params, particles,
+                        include_photons=settings.include_photons,
+                        include_pseudoscalar_mesons=settings.include_pseudoscalar_mesons,
+                        initial_guess=default_guess
+                    )
             
-            # Solve
-            include_muons = settings.include_muons and eq_type not in [
-                EquilibriumType.FIXED_YC_HADRONS_ONLY,
-                EquilibriumType.FIXED_YC_NEUTRAL,
-                EquilibriumType.FIXED_YC_YS
-            ]
-            
-            result = solve_eos_point(
-                model, eos_input, eq_type, guess,
-                include_muons=include_muons
-            )
             results.append(result)
             
             # Store for within-table extrapolation
-            sol_array = np.array([
-                result.sigma, result.omega, result.rho, result.phi,
-                result.mu_B, result.mu_Q, result.mu_S, result.mu_L
-            ])
-            previous_solutions.append(sol_array)
-            if len(previous_solutions) > 2:  # Changed from 3 to 2 for linear extrapolation
-                previous_solutions.pop(0)
+            if result.converged:
+                sol_array = _result_to_guess_array(result, eq_type_str)
+                previous_solutions.append(sol_array)
+                previous_nB_values.append(n_B)
+                if len(previous_solutions) > 3:
+                    previous_solutions.pop(0)
+                    previous_nB_values.pop(0)
             
             # Print if requested
             if settings.print_results:
@@ -336,7 +458,7 @@ def compute_table(settings: TableSettings) -> Dict[Tuple, List[EOSResult]]:
                     print(f"[{i:4d}] n_B={n_B:.4e} [{status}] err={result.error:.2e}")
         
         elapsed = time.time() - start_time
-        all_results[params] = results
+        all_results[grid_param] = results
         previous_table_results = results  # Store for next table
         
         if settings.print_timing:
@@ -347,8 +469,6 @@ def compute_table(settings: TableSettings) -> Dict[Tuple, List[EOSResult]]:
                 param_parts.append(f"Y_C={Y_C:.2f}")
             if Y_S is not None:
                 param_parts.append(f"Y_S={Y_S:.2f}")
-            if Y_Q is not None:
-                param_parts.append(f"Y_Q={Y_Q:.2f}")
             if Y_L is not None:
                 param_parts.append(f"Y_L={Y_L:.2f}")
             param_parts.append(f"T={T:.1f}")
@@ -370,23 +490,38 @@ def compute_table(settings: TableSettings) -> Dict[Tuple, List[EOSResult]]:
     return all_results
 
 
-def save_results(all_results: Dict[Tuple, List[EOSResult]], 
+def save_results(all_results: Dict[Tuple, List[SFHoEOSResult]], 
                  settings: TableSettings,
                  param_names: List[str]):
     """Save results to file."""
+    params = _get_params(settings)
+    
     if settings.output_filename:
         filename = settings.output_filename
     else:
         # Auto-generate filename with all relevant info
-        muon_tag = "with_muons" if settings.include_muons else "no_muons"
-        filename = f"sfho_tables_output/eos_{settings.parametrization}_{settings.particle_content}_{settings.equilibrium}_{muon_tag}.dat"
+        filename = f"sfho_tables_output/eos_{settings.parametrization}_{settings.particle_content}_{settings.equilibrium}.dat"
+    
+    import os
+    os.makedirs(os.path.dirname(filename) if os.path.dirname(filename) else '.', exist_ok=True)
     
     with open(filename, 'w') as f:
-        muon_str = "with muons" if settings.include_muons else "electrons only (no muons)"
-        f.write(f"# EOS Table: {settings.parametrization}, {settings.particle_content}, {muon_str}\n")
+        f.write(f"# SFHo EOS Table: {settings.parametrization}, {settings.particle_content}\n")
         f.write(f"# Equilibrium: {settings.equilibrium}\n")
+        
+        # Components included
+        components = []
+        if settings.include_photons:
+            components.append("photons")
+        if settings.include_electrons:
+            components.append("electrons")
+        if settings.include_thermal_neutrinos:
+            components.append("thermal_neutrinos")
+        if settings.include_pseudoscalar_mesons:
+            components.append("pseudoscalar_mesons")
+        f.write(f"# Components: {', '.join(components) if components else 'hadrons only'}\n")
+        
         # Build column list with independent variables first
-        # Order: n_B, [Y_C/Y_L/Y_Q/Y_S], T, then rest
         all_columns = list(settings.output_columns)
         
         # Ensure n_B is first
@@ -407,8 +542,8 @@ def save_results(all_results: Dict[Tuple, List[EOSResult]],
         
         f.write("# " + " ".join(f"{col:>14}" for col in all_columns) + "\n")
         
-        for params, results in all_results.items():
-            param_dict = dict(zip(param_names, params))
+        for grid_param, results in all_results.items():
+            param_dict = dict(zip(param_names, grid_param))
             for r in results:
                 if r.converged:
                     row = []
@@ -416,14 +551,17 @@ def save_results(all_results: Dict[Tuple, List[EOSResult]],
                         if col in param_dict:
                             val = param_dict[col]
                         elif col == 'Y_C':
-                            # Y_C = Y_Q + Y_e (hadronic charge fraction)
-                            val = r.Y_Q + r.Y_e
+                            val = r.Y_C
+                        elif col == 'Y_S':
+                            val = r.Y_S
+                        elif col == 'Y_L':
+                            val = getattr(r, 'Y_L', 0.0)
                         elif col == 'mu_e':
-                            # mu_e = mu_L - mu_Q (or -mu_Q if no neutrinos)
-                            val = r.mu_L - r.mu_Q if r.mu_L != 0 else -r.mu_Q
+                            val = getattr(r, 'mu_e', 0.0)
                         elif col == 'mu_C':
-                            # mu_C = -mu_Q (charge chemical potential)
-                            val = -r.mu_Q
+                            val = r.mu_C
+                        elif col == 'mu_nu':
+                            val = getattr(r, 'mu_nu', 0.0)
                         else:
                             val = getattr(r, col, 0.0)
                         if val is None:
@@ -436,28 +574,26 @@ def save_results(all_results: Dict[Tuple, List[EOSResult]],
     print(f"\nSaved to: {filename}")
 
 
-def results_to_arrays(results: List[EOSResult]) -> Dict[str, np.ndarray]:
-    """Convert list of EOSResult to dictionary of numpy arrays."""
+def results_to_arrays(results: List[SFHoEOSResult]) -> Dict[str, np.ndarray]:
+    """Convert list of SFHoEOSResult to dictionary of numpy arrays."""
     attrs = [
-        'n_B', 'T', 'P_total', 'e_total', 's_total',
-        'sigma', 'omega', 'rho', 'phi', 'mu_B', 'mu_Q', 'mu_S', 'mu_L',
-        'Y_Q', 'Y_S', 'Y_L', 'Y_e', 'n_e', 'n_mu', 'error'
+        'n_B', 'T', 'P_total', 'e_total', 's_total', 'f_total',
+        'sigma', 'omega', 'rho', 'phi', 'mu_B', 'mu_C', 'mu_S', 'mu_L', 'mu_e', 'mu_nu',
+        'Y_C', 'Y_S', 'n_C', 'n_e', 'error'
     ]
     arrays = {}
-    for attr in attrs:
-        arrays[attr] = np.array([getattr(r, attr, np.nan) for r in results if r.converged])
-    arrays['converged'] = np.array([r.converged for r in results])
     
-    # Compute derived quantities
-    # Y_C = Y_Q + Y_e (hadronic charge fraction)
-    arrays['Y_C'] = arrays['Y_Q'] + arrays['Y_e']
-    # mu_e = -mu_Q (electron chemical potential, no trapped neutrinos)
-    # In general: mu_e = mu_L - mu_Q for trapped neutrinos
-    arrays['mu_e'] = np.where(arrays['mu_L'] != 0, 
-                               arrays['mu_L'] - arrays['mu_Q'], 
-                               -arrays['mu_Q'])
-    # mu_C = -mu_Q (charge chemical potential, same as mu_e without neutrinos)
-    arrays['mu_C'] = -arrays['mu_Q']
+    # Filter to converged only
+    converged_results = [r for r in results if r.converged]
+    
+    for attr in attrs:
+        vals = []
+        for r in converged_results:
+            val = getattr(r, attr, np.nan)
+            vals.append(val if val is not None else np.nan)
+        arrays[attr] = np.array(vals)
+    
+    arrays['converged'] = np.array([r.converged for r in results])
     
     return arrays
 
@@ -467,31 +603,35 @@ def results_to_arrays(results: List[EOSResult]) -> Dict[str, np.ndarray]:
 #==============================================================================
 settings = TableSettings(
     # ===================== MODEL =====================
-    parametrization='sfho', # sfho, sfhoy, sfhoy_star, 2fam, 2fam_phi or create_custom_parametrization(Uln,UsN,UxN,yl,yS,yx,xsd)
-    particle_content='nucleons', # nucleons, nucleons_hyperons, nucleons_hyperons_deltas, nucleons_hyperons_deltas_mesons
-    include_muons=False,
+    parametrization='sfhoy',  # 'sfho', 'sfhoy', 'sfhoy_star', '2fam_phi', 
+    particle_content='nucleons_hyperons_deltas',  # 'nucleons', 'nucleons_hyperons', 'nucleons_hyperons_deltas'
     
     # ===================== EQUILIBRIUM =====================
-    # Options: 'beta_eq', 'fixed_YQ', 'fixed_YC_hadrons_only', 
-    #          'fixed_YC_neutral', 'fixed_YC_YS', etc.
-    equilibrium='beta_eq',
+    # Options: 'beta_eq', 'fixed_yc', 'fixed_yc_ys', 'trapped_neutrinos'
+    equilibrium='fixed_yc_ys',
     
     # ===================== GRID =====================
     n_B_values=np.linspace(0.1, 10, 300) * 0.1583,
-    T_values=np.concatenate((np.array([0.1]), np.linspace(10, 100, 10))),
+    T_values=np.concatenate((np.array([0.1]), np.linspace(2.5, 100, 40))),
     
     # ===================== CONSTRAINTS =====================
-    # Y_C_values=0.5,    # For fixed_YC modes
-    # Y_S_values=0.0,    # For fixed_YC_YS or fixed_YQ_YS
-    # Y_Q_values=0.3,    # For fixed_YQ modes
-    #Y_C_values=np.linspace(0.5, 0, 6),  # Reversed: 0.5→0 for better convergence at low Y_C
+    Y_C_values=np.array([0., 0.3, 0.5]),     # For fixed_yc modes
+    Y_S_values=np.linspace(0., 1, 11),     # For fixed_yc_ys mode
+    # Y_L_values=0.4,     # For trapped_neutrinos mode
+    
+    # ===================== OPTIONS =====================
+    include_photons=True,
+    include_electrons=True,
+    include_thermal_neutrinos=True,
+    include_pseudoscalar_mesons=True,
+    
     # ===================== OUTPUT =====================
     print_results=False, 
     print_first_n=1,
     print_errors=True,
     print_timing=True,
     save_to_file=True,
-    output_filename=None,  # Auto-generate: eos_{param}_{particles}_{eq}_{muon_status}.dat
+    output_filename=None,  # Auto-generate
 )
 
 

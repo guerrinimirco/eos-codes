@@ -44,11 +44,13 @@ class ThermoResult:
         P: Pressure (MeV/fm³)
         e: Energy density (MeV/fm³)
         s: Entropy density (fm⁻³)
+        mu: Chemical potential (MeV) - optional, set by from_density functions
     """
     n: float      # Net number density
     P: float      # Pressure
     e: float      # Energy density
     s: float      # Entropy density
+    mu: float = 0.0  # Chemical potential (optional)
     
     def __repr__(self):
         return (f"ThermoResult(n={self.n:.4e}, P={self.P:.4e}, "
@@ -146,7 +148,8 @@ def electron_thermo(mu_e: float, T: float,
     return lepton_thermo(mu_e, T, Electron, include_antiparticles)
 
 
-def electron_thermo_from_density(n_e: float, T: float) -> ThermoResult:
+def electron_thermo_from_density(n_e: float, T: float, 
+                                   mu_e_guess: float = None) -> ThermoResult:
     """
     Compute electron thermodynamics for a prescribed electron density.
     
@@ -159,46 +162,39 @@ def electron_thermo_from_density(n_e: float, T: float) -> ThermoResult:
     Args:
         n_e: Prescribed electron density (fm⁻³)
         T: Temperature (MeV)
+        mu_e_guess: Optional initial guess for μ_e (MeV). If provided, uses this
+                   as starting point for root finding. Useful when chaining
+                   calculations across density points.
         
     Returns:
         ThermoResult with (n, P, e, s) for electrons at the given density
+        Also stores mu_e in result.mu attribute
     """
-    from scipy.optimize import brentq
+    from scipy.optimize import root
     
     if n_e <= 0:
         return ThermoResult(n=0.0, P=0.0, e=0.0, s=0.0)
     
     # Find μ_e such that n(μ_e) = n_e
     def residual(mu):
-        result = electron_thermo(mu, T, include_antiparticles=True)
+        result = electron_thermo(mu[0], T, include_antiparticles=True)
         return result.n - n_e
     
-    # Set bounds for the search
-    # For electrons: n increases with μ
-    # At T=10 MeV and typical densities, μ_e is in range [1, 500] MeV
-    mu_min = 0.1
-    mu_max = 1000.0
+    # Initial guess
+    if mu_e_guess is not None:
+        x0 = mu_e_guess
+    else:
+        # Estimate from ultra-relativistic limit: n ≈ μ³/(3π²ℏc³)
+        x0 = np.sign(n_e) * (abs(n_e) * 3.0 * PI2 * hc3)**(1.0/3.0)
     
-    # Check if density is achievable
-    n_min = electron_thermo(mu_min, T).n
-    n_max = electron_thermo(mu_max, T).n
+    # Solve using root
+    sol = root(residual, [x0], method='hybr')
     
-    if n_e < n_min:
-        # Very low density - return minimal contribution
-        return ThermoResult(n=n_e, P=0.0, e=0.0, s=0.0)
+    mu_e = sol.x[0]
     
-    if n_e > n_max:
-        # Density too high - extend search range
-        mu_max = 2000.0
-    
-    try:
-        mu_e = brentq(residual, mu_min, mu_max, xtol=1e-10)
-        return electron_thermo(mu_e, T, include_antiparticles=True)
-    except ValueError:
-        # Fallback: return approximate result
-        # Use ultra-relativistic approximation: n ≈ μ³/(3π²)
-        mu_approx = (3 * PI2 * n_e * hc3)**(1/3)
-        return electron_thermo(mu_approx, T, include_antiparticles=True)
+    result = electron_thermo(mu_e, T, include_antiparticles=True)
+    result.mu = mu_e  # Store μ_e for later use
+    return result
 
 
 def muon_thermo(mu_mu: float, T: float,
