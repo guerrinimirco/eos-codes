@@ -209,14 +209,6 @@ Y_C is the electric charge fraction of hadrons and quarks (B,C,S could be remapp
 | `sfhoy_star` | Alternative hyperon couplings |
 | `2fam_phi` | Two-families model with φ meson |
 
-### AlphaBag Parameters
-
-| Parameter | Typical Range | Description |
-|-----------|---------------|-------------|
-| B_eff | 150-200 MeV | Effective bag constant |
-| α_s | 0.1-0.4 | Strong coupling constant |
-| m_s | 100-150 MeV | Strange quark mass |
-
 
 ---
 
