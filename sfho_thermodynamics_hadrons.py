@@ -129,6 +129,9 @@ class SFHoThermo:
     This is the SFHo equivalent of ZLThermo and VMITThermo.
     The meson fields (sigma, omega, rho, phi) play the same role as
     particle densities (n_p, n_n or n_u, n_d, n_s) in ZL/vMIT.
+    
+    Includes source terms for field equations (src_sigma, src_omega, src_rho, src_phi)
+    to avoid redundant compute_hadron_thermo calls in solvers.
     """
     # Meson fields
     sigma: float = 0.0
@@ -152,6 +155,11 @@ class SFHoThermo:
     e: float = 0.0
     s: float = 0.0
     f: float = 0.0
+    # Source terms for field equations (for solver use)
+    src_sigma: float = 0.0
+    src_omega: float = 0.0
+    src_rho: float = 0.0
+    src_phi: float = 0.0
     # Individual hadron states (name -> HadronState)
     states: Dict[str, HadronState] = field(default_factory=dict)
 
@@ -608,10 +616,7 @@ def compute_sfho_thermo_from_mu_fields(
     This is the main user-facing function that takes all inputs and returns
     complete thermodynamic results. Analogous to ZL's compute_zl_thermo_from_mu_n()
     and vMIT's compute_vmit_thermo_from_mu_n().
-    
-    Note: Having meson fields as inputs plays the same role as densities (n_p, n_n)
-          in ZL or quark densities (n_u, n_d, n_s) in vMIT. In solvers, we require
-          that field_residuals(σ, ω, ρ, φ) = 0.
+
     
     Args:
         mu_B, mu_C, mu_S: Conserved charge chemical potentials (MeV)
@@ -664,6 +669,10 @@ def compute_sfho_thermo_from_mu_fields(
         T=T,
         mu_B=mu_B, mu_C=mu_C, mu_S=mu_S,
         P=P_total, e=e_total, s=s_total, f=f_total,
+        src_sigma=hadron_result.src_sigma,
+        src_omega=hadron_result.src_omega,
+        src_rho=hadron_result.src_rho,
+        src_phi=hadron_result.src_phi,
         states=hadron_result.states
     )
 

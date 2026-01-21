@@ -15,6 +15,7 @@ This repository implements several nuclear and quark matter EOS models:
 | **ZL** | Zhao-Lattimer nucleonic model | Nucleons |
 | **vMIT** | Vector-MIT bag model | u, d, s quarks |
 | **ZLvMIT** | Hybrid hadron-quark construction | Mixed phase |
+| **SFHo+AlphaBag** | Hybrid hadron-quark construction | Mixed phase |
 
 ---
 
@@ -91,6 +92,15 @@ See Guerrini PhD Thesis for a summary of the model and Constantinou et al. (2025
 | `zlvmit_trapped_solvers.py` | Trapped neutrino mode solvers (will be unified with mixed_phase_eos.py) |
 | `zlvmit_plot_results.py` | Plotting utilities for hybrid EOS |
 
+### SFHo+AlphaBag Hybrid Model (`sfhoalphabag_*.py`)
+Hadron-quark mixed phase with SFHo (nucleons, hyperons, deltas) and AlphaBag quarks.
+
+| File | Description |
+|------|-------------|
+| `sfhoalphabag_mixed_phase_eos.py` | Mixed phase solver with phase boundaries |
+| `sfhoalphabag_hybrid_table_generator.py` | **Main script for hybrid tables** |
+| `sfhoalphabag_plot_results.py` | Plotting utilities for hybrid EOS |
+
 ---
 
 ## Quick Start
@@ -145,6 +155,13 @@ and run
 
 ```bash
 python zlvmit_hybrid_table_generator.py
+```
+
+### 4. Generate Hybrid SFHo+AlphaBag Tables
+modify the USER CONFIGURATION section in `sfhoalphabag_hybrid_table_generator.py` and run:
+
+```bash
+python sfhoalphabag_hybrid_table_generator.py
 ```
 ---
 
@@ -229,7 +246,6 @@ My main collaborators:
 
 
 ## Future plans
-- general hadron-quark mixed phase for SFHo-alphaBag with hyperons and deltas
 - DD2+vMIT mixed phase with hyperons
 - rewrite in python my codes for adding crusts (subnuclear phases) and solve TOV equations
 - response functions (heat capacities, susceptibilities, speed of sound, etc.)

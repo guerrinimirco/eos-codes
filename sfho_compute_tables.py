@@ -28,6 +28,8 @@ from sfho_eos import (
     solve_sfho_fixed_yc,
     solve_sfho_fixed_yc_ys,
     solve_sfho_trapped_neutrinos,
+    solve_sfho_isentropic_beta_eq,
+    solve_sfho_isentropic_trapped,
     result_to_guess,
     get_default_guess_beta_eq,
     get_default_guess_fixed_yc,
@@ -80,12 +82,14 @@ class TableSettings:
     # Model selection
     parametrization: str = 'sfho'        # 'sfho', 'sfhoy', 'sfhoy_star', '2fam_phi'
     particle_content: str = 'nucleons'   # 'nucleons', 'nucleons_hyperons', 'nucleons_hyperons_deltas'
-    equilibrium: str = 'beta_eq'         # 'beta_eq', 'fixed_yc', 'fixed_yc_ys', 'trapped_neutrinos'
+    equilibrium: str = 'beta_eq'         # 'beta_eq', 'fixed_yc', 'fixed_yc_ys', 'trapped_neutrinos',
+                                         # 'isentropic_beta_eq', 'isentropic_trapped'
     custom_params: Any = None            # SFHoParams object for custom parametrization
     
     # Grid definition
     n_B_values: np.ndarray = field(default_factory=lambda: np.logspace(-2, 0, 50) * 0.16)
     T_values: List[float] = field(default_factory=lambda: [10.0])
+    S_values: List[float] = field(default_factory=lambda: [1.0])  # Entropy per baryon for isentropic
     
     # Constraint parameters - can be single values OR arrays for multidimensional tables
     Y_C_values: Union[float, List[float], None] = None
@@ -170,12 +174,15 @@ def _get_guess_linear_extrapolation(
     previous_nB: np.ndarray,
     current_nB: float
 ) -> Optional[np.ndarray]:
-    """Linear extrapolation from last 2 points."""
-    if len(previous_solutions) < 2:
+    """Linear extrapolation from last 2 non-None points."""
+    # Get last 2 non-None solutions with their indices
+    valid = [(i, s) for i, s in enumerate(previous_solutions) if s is not None]
+    if len(valid) < 2:
         return None
     
-    n1, n2 = previous_nB[-2], previous_nB[-1]
-    s1, s2 = previous_solutions[-2], previous_solutions[-1]
+    idx1, s1 = valid[-2]
+    idx2, s2 = valid[-1]
+    n1, n2 = previous_nB[idx1], previous_nB[idx2]
     
     if abs(n2 - n1) > 1e-15:
         slope = (s2 - s1) / (n2 - n1)
@@ -186,9 +193,11 @@ def _get_guess_linear_extrapolation(
 def _get_guess_previous(
     previous_solutions: List[np.ndarray]
 ) -> Optional[np.ndarray]:
-    """Return the most recent solution."""
-    if len(previous_solutions) > 0:
-        return previous_solutions[-1].copy()
+    """Return the most recent non-None solution."""
+    # Find last non-None solution
+    for sol in reversed(previous_solutions):
+        if sol is not None:
+            return sol.copy()
     return None
 
 
@@ -197,12 +206,16 @@ def _get_guess_quadratic_extrapolation(
     previous_nB: np.ndarray,
     current_nB: float
 ) -> Optional[np.ndarray]:
-    """Quadratic extrapolation from last 3 points (Lagrange)."""
-    if len(previous_solutions) < 3:
+    """Quadratic extrapolation from last 3 non-None points (Lagrange)."""
+    # Get last 3 non-None solutions with their indices
+    valid = [(i, s) for i, s in enumerate(previous_solutions) if s is not None]
+    if len(valid) < 3:
         return None
     
-    n1, n2, n3 = previous_nB[-3], previous_nB[-2], previous_nB[-1]
-    s1, s2, s3 = previous_solutions[-3], previous_solutions[-2], previous_solutions[-1]
+    idx1, s1 = valid[-3]
+    idx2, s2 = valid[-2]
+    idx3, s3 = valid[-1]
+    n1, n2, n3 = previous_nB[idx1], previous_nB[idx2], previous_nB[idx3]
     
     denom1 = (n1 - n2) * (n1 - n3)
     denom2 = (n2 - n1) * (n2 - n3)  
@@ -265,14 +278,15 @@ def compute_table(settings: TableSettings) -> Dict[Tuple, List[SFHoEOSResult]]:
     
     # Build parameter grid
     T_list = list(settings.T_values)
+    S_list = list(settings.S_values)
     Y_C_list = _to_list(settings.Y_C_values)
     Y_S_list = _to_list(settings.Y_S_values)
     Y_L_list = _to_list(settings.Y_L_values)
     
     # Determine grid structure
-    # Order: composition constraints (Y_C, Y_S, Y_L) outer, T inner
-    # This way cross-parameter guesses come from previous T at same Y_C,
-    # which is physically more sensible (T changes are more continuous)
+    # Order: composition constraints (Y_C, Y_S, Y_L) outer, T/S inner
+    # This way cross-parameter guesses come from previous T/S at same composition,
+    # which is physically more sensible (T/S changes are more continuous)
     if eq_type_str == 'beta_eq':
         grid_params = list(product(T_list))
         param_names = ['T']
@@ -285,6 +299,12 @@ def compute_table(settings: TableSettings) -> Dict[Tuple, List[SFHoEOSResult]]:
     elif eq_type_str == 'trapped_neutrinos':
         grid_params = list(product(Y_L_list, T_list))
         param_names = ['Y_L', 'T']
+    elif eq_type_str == 'isentropic_beta_eq':
+        grid_params = list(product(S_list))
+        param_names = ['S']
+    elif eq_type_str == 'isentropic_trapped':
+        grid_params = list(product(Y_L_list, S_list))
+        param_names = ['Y_L', 'S']
     else:
         raise ValueError(f"Unknown equilibrium type: {settings.equilibrium}")
     
@@ -314,6 +334,7 @@ def compute_table(settings: TableSettings) -> Dict[Tuple, List[SFHoEOSResult]]:
     for idx, grid_param in enumerate(grid_params):
         param_dict = dict(zip(param_names, grid_param))
         T = param_dict.get('T')
+        S = param_dict.get('S')  # For isentropic modes
         Y_C = param_dict.get('Y_C')
         Y_S = param_dict.get('Y_S')
         Y_L = param_dict.get('Y_L')
@@ -433,6 +454,42 @@ def compute_table(settings: TableSettings) -> Dict[Tuple, List[SFHoEOSResult]]:
                         include_pseudoscalar_mesons=settings.include_pseudoscalar_mesons,
                         initial_guess=default_guess
                     )
+            elif eq_type_str == 'isentropic_beta_eq':
+                # Isentropic beta equilibrium: T is unknown, S is fixed
+                default_guess = np.append(get_default_guess_beta_eq(n_B, 10.0, params), 10.0)
+                if guess is None:
+                    guess = default_guess
+                result = solve_sfho_isentropic_beta_eq(
+                    n_B, S, params, particles,
+                    include_photons=settings.include_photons,
+                    include_pseudoscalar_mesons=settings.include_pseudoscalar_mesons,
+                    initial_guess=guess
+                )
+                # Retry with default guess if first attempt failed
+                if not result.converged and not np.allclose(guess, default_guess):
+                    result = solve_sfho_isentropic_beta_eq(
+                        n_B, S, params, particles,
+                        include_photons=settings.include_photons,
+                        include_pseudoscalar_mesons=settings.include_pseudoscalar_mesons,
+                        initial_guess=default_guess
+                    )
+            elif eq_type_str == 'isentropic_trapped':
+                # Isentropic trapped: T is unknown, S and Y_L are fixed
+                default_guess = np.append(get_default_guess_trapped(n_B, Y_L, 10.0, params), 10.0)
+                if guess is None:
+                    guess = default_guess
+                result = solve_sfho_isentropic_trapped(
+                    n_B, S, Y_L, params, particles,
+                    include_photons=settings.include_photons,
+                    initial_guess=guess
+                )
+                # Retry with default guess if first attempt failed
+                if not result.converged and not np.allclose(guess, default_guess):
+                    result = solve_sfho_isentropic_trapped(
+                        n_B, S, Y_L, params, particles,
+                        include_photons=settings.include_photons,
+                        initial_guess=default_guess
+                    )
             
             results.append(result)
             
@@ -471,7 +528,10 @@ def compute_table(settings: TableSettings) -> Dict[Tuple, List[SFHoEOSResult]]:
                 param_parts.append(f"Y_S={Y_S:.2f}")
             if Y_L is not None:
                 param_parts.append(f"Y_L={Y_L:.2f}")
-            param_parts.append(f"T={T:.1f}")
+            if T is not None:
+                param_parts.append(f"T={T:.1f}")
+            if S is not None:
+                param_parts.append(f"S={S:.2f}")
             param_str = " ".join(param_parts)
             
             print(f"\n  Completed {param_str} in {elapsed:.2f} s ({elapsed*1000/n_points:.1f} ms/point)")
@@ -603,35 +663,36 @@ def results_to_arrays(results: List[SFHoEOSResult]) -> Dict[str, np.ndarray]:
 #==============================================================================
 settings = TableSettings(
     # ===================== MODEL =====================
-    parametrization='sfhoy',  # 'sfho', 'sfhoy', 'sfhoy_star', '2fam_phi', 
-    particle_content='nucleons_hyperons_deltas',  # 'nucleons', 'nucleons_hyperons', 'nucleons_hyperons_deltas'
+    parametrization='2fam_phi',  # 'sfho', 'sfhoy', 'sfhoy_star', '2fam_phi', 
+    particle_content='nucleons',  # 'nucleons', 'nucleons_hyperons', 'nucleons_hyperons_deltas'
     
     # ===================== EQUILIBRIUM =====================
     # Options: 'beta_eq', 'fixed_yc', 'fixed_yc_ys', 'trapped_neutrinos'
-    equilibrium='fixed_yc_ys',
+    equilibrium='beta_eq',
     
     # ===================== GRID =====================
     n_B_values=np.linspace(0.1, 10, 300) * 0.1583,
-    T_values=np.concatenate((np.array([0.1]), np.linspace(2.5, 100, 40))),
-    
+    T_values=[0,0.1],#np.concatenate((np.array([0.1]), np.arange(2.5, 100, 2.5))),
+    S_values=np.arange(0.5, 3, 0.5),
     # ===================== CONSTRAINTS =====================
-    Y_C_values=np.array([0., 0.3, 0.5]),     # For fixed_yc modes
+    Y_C_values=np.arange(0., .5, 0.05),     # For fixed_yc modes
     Y_S_values=np.linspace(0., 1, 11),     # For fixed_yc_ys mode
-    # Y_L_values=0.4,     # For trapped_neutrinos mode
+    Y_L_values=np.arange(0.1, 0.4, 0.05),     # For trapped_neutrinos mode
     
     # ===================== OPTIONS =====================
-    include_photons=True,
+    include_photons=False,
+    include_muons=False,
     include_electrons=True,
-    include_thermal_neutrinos=True,
-    include_pseudoscalar_mesons=True,
+    include_thermal_neutrinos=False,
+    include_pseudoscalar_mesons=False,
     
     # ===================== OUTPUT =====================
-    print_results=False, 
-    print_first_n=1,
+    print_results=True, 
+    print_first_n=3,
     print_errors=True,
     print_timing=True,
     save_to_file=True,
-    output_filename=None,  # Auto-generate
+    output_filename="testT0.dat",  # Auto-generate
 )
 
 
