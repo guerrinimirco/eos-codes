@@ -224,8 +224,8 @@ My main collaborators:
 - G. Pagliara (U. Ferrara) - PhD supervisor
 - C. Constantinou (ECT* Trento) 
 - A. Lavagno (Politecnico di Torino)
-- T. Zhao 
-- S. Han
+- T. Zhao (N3AS, Berkeley)
+- S. Han (Tsung-Dao Lee Inst., Shanghai)
 
 
 ## Future plans
