@@ -63,8 +63,10 @@ class AlphaBagEOSResult:
     mu_s: float = 0.0       # Strange quark (MeV)
     mu_e: float = 0.0       # Electron (MeV)
     mu_nu: float = 0.0      # Neutrino (MeV)
+    
     mu_B: float = 0.0       # Baryon chemical potential (MeV)
     mu_C: float = 0.0       # Charge chemical potential (MeV)
+    mu_S: float = 0.0       # Strangeness chemical potential (MeV)
     
     # Number densities
     n_u: float = 0.0        # Up quark (fm⁻³)
@@ -77,6 +79,7 @@ class AlphaBagEOSResult:
     P_total: float = 0.0    # Total pressure (MeV/fm³)
     e_total: float = 0.0    # Total energy density (MeV/fm³)
     s_total: float = 0.0    # Total entropy density (fm⁻³)
+    f_total: float = 0.0    # Total free energy density (MeV/fm³)
     
     # Fractions
     Y_u: float = 0.0
@@ -209,7 +212,7 @@ def _build_result(
         error=error,
         n_B=n_B, T=T, Y_C=quark.Y_C, Y_S=quark.Y_S,
         mu_u=mu_u, mu_d=mu_d, mu_s=mu_s, mu_e=mu_e, mu_nu=mu_nu,
-        mu_B=quark.mu_B, mu_C=quark.mu_C,
+        mu_B=quark.mu_B, mu_C=quark.mu_C, mu_S=quark.mu_S,
         n_u=quark.n_u, n_d=quark.n_d, n_s=quark.n_s, n_e=thermo_e.n, n_nu=n_nu,
         P_total=P_total, e_total=e_total, s_total=s_total,
         Y_u=Y_u, Y_d=Y_d, Y_s=Y_s, Y_e=Y_e, Y_nu=Y_nu
@@ -309,6 +312,7 @@ def solve_alphabag_fixed_yc(
     include_photons: bool = True,
     include_gluons: bool = True,
     include_electrons: bool = False,
+    include_thermal_neutrinos: bool = True,
     initial_guess: Optional[np.ndarray] = None
 ) -> AlphaBagEOSResult:
     """
@@ -396,7 +400,7 @@ def solve_alphabag_fixed_yc(
         mu_u, mu_d, mu_s, mu_e, T, params,
         include_photons=include_photons,
         include_gluons=include_gluons,
-        include_thermal_neutrinos=True,
+        include_thermal_neutrinos=include_thermal_neutrinos,
         converged=sol.success,
         error=np.max(np.abs(sol.fun))
     )
@@ -411,6 +415,7 @@ def solve_alphabag_fixed_yc_ys(
     include_photons: bool = True,
     include_gluons: bool = True,
     include_electrons: bool = False,
+    include_thermal_neutrinos: bool = True,
     initial_guess: Optional[np.ndarray] = None
 ) -> AlphaBagEOSResult:
     """
@@ -502,7 +507,7 @@ def solve_alphabag_fixed_yc_ys(
         mu_u, mu_d, mu_s, mu_e, T, params,
         include_photons=include_photons,
         include_gluons=include_gluons,
-        include_thermal_neutrinos=True,
+        include_thermal_neutrinos=include_thermal_neutrinos,
         converged=sol.success,
         error=np.max(np.abs(sol.fun))
     )

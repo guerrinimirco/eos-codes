@@ -175,6 +175,7 @@ def _compute_unpaired_table(settings: AlphaBagTableSettings) -> Dict[Tuple, List
                     n_B, T, params,
                     include_photons=settings.include_photons,
                     include_gluons=settings.include_gluons,
+                    include_thermal_neutrinos=settings.include_thermal_neutrinos,
                     initial_guess=guess
                 )
             elif eq_type == 'fixed_yc':
@@ -183,6 +184,7 @@ def _compute_unpaired_table(settings: AlphaBagTableSettings) -> Dict[Tuple, List
                     include_photons=settings.include_photons,
                     include_gluons=settings.include_gluons,
                     include_electrons=settings.include_electrons,
+                    include_thermal_neutrinos=settings.include_thermal_neutrinos,
                     initial_guess=guess
                 )
             elif eq_type == 'fixed_yc_ys':
@@ -191,6 +193,7 @@ def _compute_unpaired_table(settings: AlphaBagTableSettings) -> Dict[Tuple, List
                     include_photons=settings.include_photons,
                     include_gluons=settings.include_gluons,
                     include_electrons=settings.include_electrons,
+                    include_thermal_neutrinos=settings.include_thermal_neutrinos,
                     initial_guess=guess
                 )
             
